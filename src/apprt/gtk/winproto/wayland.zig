@@ -14,6 +14,7 @@ const input = @import("../../../input.zig");
 const ApprtWindow = @import("../class/window.zig").Window;
 
 const wl = wayland.client.wl;
+const kde = wayland.client.kde;
 const org = wayland.client.org;
 const xdg = wayland.client.xdg;
 
@@ -32,6 +33,18 @@ pub const App = struct {
         kde_decoration_manager: ?*org.KdeKwinServerDecorationManager = null,
 
         kde_slide_manager: ?*org.KdeKwinSlideManager = null,
+
+        kde_output_order: ?*kde.OutputOrderV1 = null,
+
+        /// Connector name of the primary output (e.g., "DP-1") as reported
+        /// by kde_output_order_v1. The first output in each priority list
+        /// is the primary.
+        primary_output_name: ?[63:0]u8 = null,
+
+        /// Tracks the output order event cycle. Set to true after a `done`
+        /// event so the next `output` event is captured as the new primary.
+        /// Initialized to true so the first event after binding is captured.
+        output_order_done: bool = true,
 
         default_deco_mode: ?org.KdeKwinServerDecorationManager.Mode = null,
 
@@ -83,9 +96,16 @@ pub const App = struct {
         registry.setListener(*Context, registryListener, context);
         if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 
-        // Do another round-trip to get the default decoration mode
+        // Set up listeners for protocols that send events on bind.
+        // All listeners must be set before the roundtrip so that
+        // events aren't lost.
         if (context.kde_decoration_manager) |deco_manager| {
             deco_manager.setListener(*Context, decoManagerListener, context);
+        }
+        if (context.kde_output_order) |output_order| {
+            output_order.setListener(*Context, outputOrderListener, context);
+        }
+        if (context.kde_decoration_manager != null or context.kde_output_order != null) {
             if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
         }
 
@@ -127,9 +147,55 @@ pub const App = struct {
         return true;
     }
 
-    pub fn initQuickTerminal(_: *App, apprt_window: *ApprtWindow) !void {
+    pub fn initQuickTerminal(self: *App, apprt_window: *ApprtWindow) !void {
         const window = apprt_window.as(gtk.Window);
         layer_shell.initForWindow(window);
+
+        // Set target monitor based on config (null lets compositor decide)
+        const monitor = resolveQuickTerminalMonitor(self.context, apprt_window);
+        layer_shell.setMonitor(window, monitor);
+    }
+
+    /// Resolve the quick-terminal-screen config to a specific monitor.
+    /// Returns null to let the compositor decide (used for .mouse mode).
+    fn resolveQuickTerminalMonitor(
+        context: *Context,
+        apprt_window: *ApprtWindow,
+    ) ?*gdk.Monitor {
+        const config = if (apprt_window.getConfig()) |v| v.get() else return null;
+        const display = apprt_window.as(gtk.Widget).getDisplay();
+
+        return switch (config.@"quick-terminal-screen") {
+            .mouse => null,
+            .main, .@"macos-menu-bar" => blk: {
+                const monitors = display.getMonitors();
+                const primary_name: ?[]const u8 = if (context.primary_output_name) |*buf|
+                    std.mem.sliceTo(buf, 0)
+                else
+                    null;
+
+                var fallback: ?*gdk.Monitor = null;
+                var i: u32 = 0;
+                while (monitors.getObject(i)) |item| : (i += 1) {
+                    // getObject returns transfer-full; release immediately.
+                    // The display keeps its own ref so the pointer stays valid.
+                    item.unref();
+                    const monitor = gobject.ext.cast(gdk.Monitor, item) orelse continue;
+                    if (fallback == null) fallback = monitor;
+
+                    if (primary_name) |name| {
+                        const connector = std.mem.sliceTo(
+                            monitor.getConnector() orelse continue,
+                            0,
+                        );
+                        if (std.mem.eql(u8, connector, name)) {
+                            break :blk monitor;
+                        }
+                    }
+                }
+                break :blk fallback;
+            },
+        };
     }
 
     fn getInterfaceType(comptime field: std.builtin.Type.StructField) ?type {
@@ -200,10 +266,20 @@ pub const App = struct {
             .global_remove => |v| remove: {
                 inline for (ctx_fields) |field| {
                     if (getInterfaceType(field) == null) continue;
-                    const global = @field(context, field.name) orelse break :remove;
-                    if (global.getId() == v.name) {
-                        global.destroy();
-                        @field(context, field.name) = null;
+                    if (@field(context, field.name)) |global| {
+                        if (global.getId() == v.name) {
+                            global.destroy();
+                            @field(context, field.name) = null;
+
+                            // Reset cached primary-output state if the protocol
+                            // providing it disappears.
+                            if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
+                                context.primary_output_name = null;
+                                context.primary_output_match_failed_logged = false;
+                                context.output_order_done = true;
+                            }
+                            break :remove;
+                        }
                     }
                 }
             },
@@ -218,6 +294,30 @@ pub const App = struct {
         switch (event) {
             .default_mode => |mode| {
                 context.default_deco_mode = @enumFromInt(mode.mode);
+            },
+        }
+    }
+
+    fn outputOrderListener(
+        _: *kde.OutputOrderV1,
+        event: kde.OutputOrderV1.Event,
+        context: *Context,
+    ) void {
+        switch (event) {
+            .output => |v| {
+                if (context.output_order_done) {
+                    context.output_order_done = false;
+                    const name = std.mem.sliceTo(v.output_name, 0);
+                    if (name.len <= 63) {
+                        var buf: [63:0]u8 = @splat(0);
+                        @memcpy(buf[0..name.len], name);
+                        context.primary_output_name = buf;
+                        log.debug("primary output: {s}", .{name});
+                    }
+                }
+            },
+            .done => {
+                context.output_order_done = true;
             },
         }
     }
@@ -417,6 +517,11 @@ pub const Window = struct {
         });
         layer_shell.setNamespace(window, config.@"gtk-quick-terminal-namespace");
 
+        // Re-resolve the target monitor on every sync so that config reloads
+        // and primary-output changes take effect without recreating the window.
+        const target_monitor = App.resolveQuickTerminalMonitor(self.app_context, self.apprt_window);
+        layer_shell.setMonitor(window, target_monitor);
+
         layer_shell.setKeyboardMode(
             window,
             switch (config.@"quick-terminal-keyboard-interactivity") {
@@ -486,8 +591,17 @@ pub const Window = struct {
         const window = apprt_window.as(gtk.Window);
         const config = if (apprt_window.getConfig()) |v| v.get() else return;
 
+        // Use the configured monitor for sizing if not in mouse mode
+        const size_monitor = switch (config.@"quick-terminal-screen") {
+            .mouse => monitor,
+            .main, .@"macos-menu-bar" => App.resolveQuickTerminalMonitor(
+                apprt_window.winproto().wayland.app_context,
+                apprt_window,
+            ) orelse monitor,
+        };
+
         var monitor_size: gdk.Rectangle = undefined;
-        monitor.getGeometry(&monitor_size);
+        size_monitor.getGeometry(&monitor_size);
 
         const dims = config.@"quick-terminal-size".calculate(
             config.@"quick-terminal-position",
