@@ -41,6 +41,10 @@ pub const App = struct {
         /// is the primary.
         primary_output_name: ?[63:0]u8 = null,
 
+        /// Used to avoid repeatedly logging the same primary-name mismatch
+        /// when we can't map the compositor connector name to a GDK monitor.
+        primary_output_match_failed_logged: bool = false,
+
         /// Tracks the output order event cycle. Set to true after a `done`
         /// event so the next `output` event is captured as the new primary.
         /// Initialized to true so the first event after binding is captured.
@@ -153,6 +157,7 @@ pub const App = struct {
 
         // Set target monitor based on config (null lets compositor decide)
         const monitor = resolveQuickTerminalMonitor(self.context, apprt_window);
+        defer if (monitor) |v| v.unref();
         layer_shell.setMonitor(window, monitor);
     }
 
@@ -174,25 +179,44 @@ pub const App = struct {
                 else
                     null;
 
+                // We own a strong ref for every object returned by getObject.
+                // Keep one ref as a fallback to return, and release all others.
                 var fallback: ?*gdk.Monitor = null;
+                var matched_primary = false;
                 var i: u32 = 0;
                 while (monitors.getObject(i)) |item| : (i += 1) {
-                    // getObject returns transfer-full; release immediately.
-                    // The display keeps its own ref so the pointer stays valid.
-                    item.unref();
-                    const monitor = gobject.ext.cast(gdk.Monitor, item) orelse continue;
-                    if (fallback == null) fallback = monitor;
+                    const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
+                        item.unref();
+                        continue;
+                    };
+                    const keep_as_fallback = fallback == null;
+                    if (keep_as_fallback) fallback = monitor;
 
                     if (primary_name) |name| {
-                        const connector = std.mem.sliceTo(
-                            monitor.getConnector() orelse continue,
-                            0,
-                        );
-                        if (std.mem.eql(u8, connector, name)) {
-                            break :blk monitor;
+                        if (monitor.getConnector()) |connector_z| {
+                            const connector = std.mem.sliceTo(connector_z, 0);
+                            if (std.mem.eql(u8, connector, name)) {
+                                matched_primary = true;
+                                context.primary_output_match_failed_logged = false;
+                                if (fallback) |v| {
+                                    if (v != monitor) v.unref();
+                                }
+                                break :blk monitor;
+                            }
                         }
                     }
+
+                    if (!keep_as_fallback) monitor.unref();
                 }
+
+                if (primary_name != null and !matched_primary and !context.primary_output_match_failed_logged) {
+                    context.primary_output_match_failed_logged = true;
+                    log.debug(
+                        "could not match primary output connector to a GDK monitor; falling back to first monitor",
+                        .{},
+                    );
+                }
+
                 break :blk fallback;
             },
         };
@@ -312,7 +336,13 @@ pub const App = struct {
                         var buf: [63:0]u8 = @splat(0);
                         @memcpy(buf[0..name.len], name);
                         context.primary_output_name = buf;
+                        context.primary_output_match_failed_logged = false;
                         log.debug("primary output: {s}", .{name});
+                    } else {
+                        log.warn(
+                            "ignoring primary output name longer than 63 bytes from kde_output_order_v1",
+                            .{},
+                        );
                     }
                 }
             },
@@ -520,6 +550,7 @@ pub const Window = struct {
         // Re-resolve the target monitor on every sync so that config reloads
         // and primary-output changes take effect without recreating the window.
         const target_monitor = App.resolveQuickTerminalMonitor(self.app_context, self.apprt_window);
+        defer if (target_monitor) |v| v.unref();
         layer_shell.setMonitor(window, target_monitor);
 
         layer_shell.setKeyboardMode(
@@ -591,14 +622,17 @@ pub const Window = struct {
         const window = apprt_window.as(gtk.Window);
         const config = if (apprt_window.getConfig()) |v| v.get() else return;
 
-        // Use the configured monitor for sizing if not in mouse mode
-        const size_monitor = switch (config.@"quick-terminal-screen") {
-            .mouse => monitor,
+        const resolved_monitor = switch (config.@"quick-terminal-screen") {
+            .mouse => null,
             .main, .@"macos-menu-bar" => App.resolveQuickTerminalMonitor(
                 apprt_window.winproto().wayland.app_context,
                 apprt_window,
-            ) orelse monitor,
+            ),
         };
+        defer if (resolved_monitor) |v| v.unref();
+
+        // Use the configured monitor for sizing if not in mouse mode.
+        const size_monitor = resolved_monitor orelse monitor;
 
         var monitor_size: gdk.Rectangle = undefined;
         size_monitor.getGeometry(&monitor_size);
