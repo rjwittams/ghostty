@@ -50,6 +50,10 @@ pub const App = struct {
         /// Initialized to true so the first event after binding is captured.
         output_order_done: bool = true,
 
+        /// True if we've received an `output` event in the current cycle.
+        /// This lets us detect empty cycles and clear stale cached state.
+        output_order_seen_output: bool = false,
+
         default_deco_mode: ?org.KdeKwinServerDecorationManager.Mode = null,
 
         xdg_activation: ?*xdg.ActivationV1 = null,
@@ -100,15 +104,9 @@ pub const App = struct {
         registry.setListener(*Context, registryListener, context);
         if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
 
-        // Set up listeners for protocols that send events on bind.
-        // All listeners must be set before the roundtrip so that
-        // events aren't lost.
-        if (context.kde_decoration_manager) |deco_manager| {
-            deco_manager.setListener(*Context, decoManagerListener, context);
-        }
-        if (context.kde_output_order) |output_order| {
-            output_order.setListener(*Context, outputOrderListener, context);
-        }
+        // Do another roundtrip to process events emitted by globals we bound
+        // during registry discovery (e.g. default decoration mode, output
+        // order). Listeners are installed at bind time in registryListener.
         if (context.kde_decoration_manager != null or context.kde_output_order != null) {
             if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
         }
@@ -269,7 +267,15 @@ pub const App = struct {
                     ) == .eq) {
                         log.debug("matched {}", .{T});
 
-                        @field(context, field.name) = registry.bind(
+                        if (@field(context, field.name) != null) {
+                            log.warn(
+                                "duplicate global for {s}; keeping existing binding",
+                                .{v.interface},
+                            );
+                            break;
+                        }
+
+                        const global = registry.bind(
                             v.name,
                             T,
                             T.generated_version,
@@ -280,6 +286,22 @@ pub const App = struct {
                             );
                             return;
                         };
+                        @field(context, field.name) = global;
+
+                        // Install listeners immediately at bind time. This
+                        // keeps listener setup and object lifetime in one
+                        // place and also supports globals that appear later.
+                        if (comptime std.mem.eql(u8, field.name, "kde_decoration_manager")) {
+                            const deco_manager: *org.KdeKwinServerDecorationManager =
+                                @field(context, field.name).?;
+                            deco_manager.setListener(*Context, decoManagerListener, context);
+                        }
+                        if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
+                            const output_order: *kde.OutputOrderV1 =
+                                @field(context, field.name).?;
+                            output_order.setListener(*Context, outputOrderListener, context);
+                        }
+                        break;
                     }
                 }
             },
@@ -301,6 +323,7 @@ pub const App = struct {
                                 context.primary_output_name = null;
                                 context.primary_output_match_failed_logged = false;
                                 context.output_order_done = true;
+                                context.output_order_seen_output = false;
                             }
                             break :remove;
                         }
@@ -331,14 +354,24 @@ pub const App = struct {
             .output => |v| {
                 if (context.output_order_done) {
                     context.output_order_done = false;
+                    context.output_order_seen_output = true;
                     const name = std.mem.sliceTo(v.output_name, 0);
-                    if (name.len <= 63) {
+                    if (name.len == 0) {
+                        context.primary_output_name = null;
+                        context.primary_output_match_failed_logged = false;
+                        log.warn(
+                            "ignoring empty primary output name from kde_output_order_v1",
+                            .{},
+                        );
+                    } else if (name.len <= 63) {
                         var buf: [63:0]u8 = @splat(0);
                         @memcpy(buf[0..name.len], name);
                         context.primary_output_name = buf;
                         context.primary_output_match_failed_logged = false;
                         log.debug("primary output: {s}", .{name});
                     } else {
+                        context.primary_output_name = null;
+                        context.primary_output_match_failed_logged = false;
                         log.warn(
                             "ignoring primary output name longer than 63 bytes from kde_output_order_v1",
                             .{},
@@ -347,7 +380,14 @@ pub const App = struct {
                 }
             },
             .done => {
+                // An empty update means the compositor currently reports no
+                // outputs in priority order, so drop any stale cached primary.
+                if (!context.output_order_seen_output) {
+                    context.primary_output_name = null;
+                    context.primary_output_match_failed_logged = false;
+                }
                 context.output_order_done = true;
+                context.output_order_seen_output = false;
             },
         }
     }
