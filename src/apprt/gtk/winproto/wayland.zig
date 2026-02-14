@@ -161,6 +161,7 @@ pub const App = struct {
 
     /// Resolve the quick-terminal-screen config to a specific monitor.
     /// Returns null to let the compositor decide (used for .mouse mode).
+    /// Caller owns the returned ref and must unref it.
     fn resolveQuickTerminalMonitor(
         context: *Context,
         apprt_window: *ApprtWindow,
@@ -172,50 +173,41 @@ pub const App = struct {
             .mouse => null,
             .main, .@"macos-menu-bar" => blk: {
                 const monitors = display.getMonitors();
-                const primary_name: ?[]const u8 = if (context.primary_output_name) |*buf|
-                    std.mem.sliceTo(buf, 0)
-                else
-                    null;
 
-                // We own a strong ref for every object returned by getObject.
-                // Keep one ref as a fallback to return, and release all others.
-                var fallback: ?*gdk.Monitor = null;
-                var matched_primary = false;
-                var i: u32 = 0;
-                while (monitors.getObject(i)) |item| : (i += 1) {
-                    const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
-                        item.unref();
-                        continue;
-                    };
-                    const keep_as_fallback = fallback == null;
-                    if (keep_as_fallback) fallback = monitor;
-
-                    if (primary_name) |name| {
+                // Try to find the monitor matching the primary output name.
+                if (context.primary_output_name) |*stored_name| {
+                    const name = std.mem.sliceTo(stored_name, 0);
+                    var i: u32 = 0;
+                    while (monitors.getObject(i)) |item| : (i += 1) {
+                        const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
+                            item.unref();
+                            continue;
+                        };
                         if (monitor.getConnector()) |connector_z| {
                             const connector = std.mem.sliceTo(connector_z, 0);
                             if (std.mem.eql(u8, connector, name)) {
-                                matched_primary = true;
                                 context.primary_output_match_failed_logged = false;
-                                if (fallback) |v| {
-                                    if (v != monitor) v.unref();
-                                }
                                 break :blk monitor;
                             }
                         }
+                        monitor.unref();
                     }
 
-                    if (!keep_as_fallback) monitor.unref();
+                    if (!context.primary_output_match_failed_logged) {
+                        context.primary_output_match_failed_logged = true;
+                        log.debug(
+                            "could not match primary output connector to a GDK monitor; falling back to first monitor",
+                            .{},
+                        );
+                    }
                 }
 
-                if (primary_name != null and !matched_primary and !context.primary_output_match_failed_logged) {
-                    context.primary_output_match_failed_logged = true;
-                    log.debug(
-                        "could not match primary output connector to a GDK monitor; falling back to first monitor",
-                        .{},
-                    );
-                }
-
-                break :blk fallback;
+                // Fall back to the first monitor in the list.
+                const first = monitors.getObject(0) orelse break :blk null;
+                break :blk gobject.ext.cast(gdk.Monitor, first) orelse {
+                    first.unref();
+                    break :blk null;
+                };
             },
         };
     }
@@ -355,27 +347,19 @@ pub const App = struct {
                 if (context.output_order_done) {
                     context.output_order_done = false;
                     context.output_order_seen_output = true;
+                    context.primary_output_match_failed_logged = false;
                     const name = std.mem.sliceTo(v.output_name, 0);
                     if (name.len == 0) {
                         context.primary_output_name = null;
-                        context.primary_output_match_failed_logged = false;
-                        log.warn(
-                            "ignoring empty primary output name from kde_output_order_v1",
-                            .{},
-                        );
+                        log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
                     } else if (name.len <= 63) {
                         var buf: [63:0]u8 = @splat(0);
                         @memcpy(buf[0..name.len], name);
                         context.primary_output_name = buf;
-                        context.primary_output_match_failed_logged = false;
                         log.debug("primary output: {s}", .{name});
                     } else {
                         context.primary_output_name = null;
-                        context.primary_output_match_failed_logged = false;
-                        log.warn(
-                            "ignoring primary output name longer than 63 bytes from kde_output_order_v1",
-                            .{},
-                        );
+                        log.warn("ignoring primary output name longer than 63 bytes from kde_output_order_v1", .{});
                     }
                 }
             },
@@ -662,13 +646,10 @@ pub const Window = struct {
         const window = apprt_window.as(gtk.Window);
         const config = if (apprt_window.getConfig()) |v| v.get() else return;
 
-        const resolved_monitor = switch (config.@"quick-terminal-screen") {
-            .mouse => null,
-            .main, .@"macos-menu-bar" => App.resolveQuickTerminalMonitor(
-                apprt_window.winproto().wayland.app_context,
-                apprt_window,
-            ),
-        };
+        const resolved_monitor = App.resolveQuickTerminalMonitor(
+            apprt_window.winproto().wayland.app_context,
+            apprt_window,
+        );
         defer if (resolved_monitor) |v| v.unref();
 
         // Use the configured monitor for sizing if not in mouse mode.
