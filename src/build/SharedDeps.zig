@@ -661,14 +661,10 @@ fn addGtkNg(
             .optimize = optimize,
         })) |gtk4_layer_shell| {
             const layer_shell_module = gtk4_layer_shell.module("gtk4-layer-shell");
-            if (gobject_) |gobject| layer_shell_module.addImport(
-                "gtk",
-                gobject.module("gtk4"),
-            );
-            if (gobject_) |gobject| layer_shell_module.addImport(
-                "gdk",
-                gobject.module("gdk4"),
-            );
+            if (gobject_) |gobject| {
+                layer_shell_module.addImport("gtk", gobject.module("gtk4"));
+                layer_shell_module.addImport("gdk", gobject.module("gdk4"));
+            }
             step.root_module.addImport(
                 "gtk4-layer-shell",
                 layer_shell_module,

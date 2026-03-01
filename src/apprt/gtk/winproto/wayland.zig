@@ -54,10 +54,6 @@ pub const App = struct {
         /// Initialized to true so the first event after binding is captured.
         output_order_done: bool = true,
 
-        /// True if we've received an `output` event in the current cycle.
-        /// This lets us detect empty cycles and clear stale cached state.
-        output_order_seen_output: bool = false,
-
         default_deco_mode: ?org.KdeKwinServerDecorationManager.Mode = null,
 
         xdg_activation: ?*xdg.ActivationV1 = null,
@@ -243,6 +239,13 @@ pub const App = struct {
         return null;
     }
 
+    /// Reset cached state derived from kde_output_order_v1.
+    fn resetOutputOrderState(context: *Context) void {
+        context.primary_output_name = null;
+        context.primary_output_match_failed_logged = false;
+        context.output_order_done = true;
+    }
+
     fn registryListener(
         registry: *wl.Registry,
         event: wl.Registry.Event,
@@ -315,6 +318,12 @@ pub const App = struct {
                                 .{ v.interface, existing_global_name orelse 0, v.name },
                             );
                             old.destroy();
+
+                            if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
+                                // Replacement means the previous primary may be stale
+                                // until the new object sends a fresh cycle.
+                                resetOutputOrderState(context);
+                            }
                         }
 
                         @field(context, field.name) = global;
@@ -352,10 +361,7 @@ pub const App = struct {
                                 @field(context, name_field) = null;
 
                                 if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                                    context.primary_output_name = null;
-                                    context.primary_output_match_failed_logged = false;
-                                    context.output_order_done = true;
-                                    context.output_order_seen_output = false;
+                                    resetOutputOrderState(context);
                                 }
                                 break :remove;
                             }
@@ -396,7 +402,6 @@ pub const App = struct {
                 // Only the first output event after a `done` is the new primary.
                 if (!context.output_order_done) return;
                 context.output_order_done = false;
-                context.output_order_seen_output = true;
                 // A new primary invalidates any cached match-failure state.
                 context.primary_output_match_failed_logged = false;
 
@@ -415,14 +420,13 @@ pub const App = struct {
                 }
             },
             .done => {
-                // An empty update means the compositor currently reports no
-                // outputs in priority order, so drop any stale cached primary.
-                if (!context.output_order_seen_output) {
-                    context.primary_output_name = null;
-                    context.primary_output_match_failed_logged = false;
+                if (context.output_order_done) {
+                    // No output arrived since the previous done. Treat this as
+                    // an empty update and drop any stale cached primary.
+                    resetOutputOrderState(context);
+                    return;
                 }
                 context.output_order_done = true;
-                context.output_order_seen_output = false;
             },
         }
     }
