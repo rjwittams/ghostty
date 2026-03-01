@@ -33,10 +33,12 @@ pub const App = struct {
         // FIXME: replace with `zxdg_decoration_v1` once GTK merges
         // https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/6398
         kde_decoration_manager: ?*org.KdeKwinServerDecorationManager = null,
+        kde_decoration_manager_global_name: ?u32 = null,
 
         kde_slide_manager: ?*org.KdeKwinSlideManager = null,
 
         kde_output_order: ?*kde.OutputOrderV1 = null,
+        kde_output_order_global_name: ?u32 = null,
 
         /// Connector name of the primary output (e.g., "DP-1") as reported
         /// by kde_output_order_v1. The first output in each priority list
@@ -229,6 +231,18 @@ pub const App = struct {
         return T;
     }
 
+    /// Returns the Context field that stores the registry global name for
+    /// protocols that support replacement, or null for simple protocols.
+    fn getGlobalNameField(comptime field_name: []const u8) ?[]const u8 {
+        if (std.mem.eql(u8, field_name, "kde_decoration_manager")) {
+            return "kde_decoration_manager_global_name";
+        }
+        if (std.mem.eql(u8, field_name, "kde_output_order")) {
+            return "kde_output_order_global_name";
+        }
+        return null;
+    }
+
     fn registryListener(
         registry: *wl.Registry,
         event: wl.Registry.Event,
@@ -253,20 +267,34 @@ pub const App = struct {
 
                 inline for (ctx_fields) |field| {
                     const T = getInterfaceType(field) orelse continue;
-
-                    if (std.mem.orderZ(
-                        u8,
-                        v.interface,
-                        T.interface.name,
-                    ) == .eq) {
+                    if (std.mem.orderZ(u8, v.interface, T.interface.name) == .eq) {
                         log.debug("matched {}", .{T});
 
-                        if (@field(context, field.name) != null) {
-                            log.warn(
-                                "duplicate global for {s}; keeping existing binding",
-                                .{v.interface},
-                            );
-                            break;
+                        const existing_global = @field(context, field.name);
+                        const global_name_field = comptime getGlobalNameField(field.name);
+                        const existing_global_name: ?u32 = if (global_name_field) |name_field|
+                            @field(context, name_field)
+                        else
+                            null;
+
+                        // Already bound: skip duplicate, allow replacement for
+                        // protocols tracked by registry global name.
+                        if (existing_global != null) {
+                            if (global_name_field != null) {
+                                if (existing_global_name != null and existing_global_name.? == v.name) {
+                                    log.debug(
+                                        "duplicate global for {s} with name={}; keeping existing binding",
+                                        .{ v.interface, v.name },
+                                    );
+                                    break;
+                                }
+                            } else {
+                                log.warn(
+                                    "duplicate global for {s}; keeping existing binding",
+                                    .{v.interface},
+                                );
+                                break;
+                            }
                         }
 
                         const global = registry.bind(
@@ -280,20 +308,28 @@ pub const App = struct {
                             );
                             return;
                         };
+
+                        if (existing_global) |old| {
+                            log.debug(
+                                "replacement global for {s}; switching old_name={} to new_name={}",
+                                .{ v.interface, existing_global_name orelse 0, v.name },
+                            );
+                            old.destroy();
+                        }
+
                         @field(context, field.name) = global;
+                        if (global_name_field) |name_field| {
+                            @field(context, name_field) = v.name;
+                        }
 
                         // Install listeners immediately at bind time. This
                         // keeps listener setup and object lifetime in one
                         // place and also supports globals that appear later.
                         if (comptime std.mem.eql(u8, field.name, "kde_decoration_manager")) {
-                            const deco_manager: *org.KdeKwinServerDecorationManager =
-                                @field(context, field.name).?;
-                            deco_manager.setListener(*Context, decoManagerListener, context);
+                            global.setListener(*Context, decoManagerListener, context);
                         }
                         if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                            const output_order: *kde.OutputOrderV1 =
-                                @field(context, field.name).?;
-                            output_order.setListener(*Context, outputOrderListener, context);
+                            global.setListener(*Context, outputOrderListener, context);
                         }
                         break;
                     }
@@ -306,20 +342,31 @@ pub const App = struct {
             .global_remove => |v| remove: {
                 inline for (ctx_fields) |field| {
                     if (getInterfaceType(field) == null) continue;
-                    if (@field(context, field.name)) |global| {
-                        if (global.getId() == v.name) {
-                            global.destroy();
-                            @field(context, field.name) = null;
 
-                            // Reset cached primary-output state if the protocol
-                            // providing it disappears.
-                            if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                                context.primary_output_name = null;
-                                context.primary_output_match_failed_logged = false;
-                                context.output_order_done = true;
-                                context.output_order_seen_output = false;
+                    const global_name_field = comptime getGlobalNameField(field.name);
+                    if (global_name_field) |name_field| {
+                        if (@field(context, name_field)) |stored_name| {
+                            if (stored_name == v.name) {
+                                if (@field(context, field.name)) |global| global.destroy();
+                                @field(context, field.name) = null;
+                                @field(context, name_field) = null;
+
+                                if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
+                                    context.primary_output_name = null;
+                                    context.primary_output_match_failed_logged = false;
+                                    context.output_order_done = true;
+                                    context.output_order_seen_output = false;
+                                }
+                                break :remove;
                             }
-                            break :remove;
+                        }
+                    } else {
+                        if (@field(context, field.name)) |global| {
+                            if (global.getId() == v.name) {
+                                global.destroy();
+                                @field(context, field.name) = null;
+                                break :remove;
+                            }
                         }
                     }
                 }
