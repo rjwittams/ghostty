@@ -26,6 +26,8 @@ pub const App = struct {
     context: *Context,
 
     const Context = struct {
+        const max_output_name_len = 63;
+
         kde_blur_manager: ?*org.KdeKwinBlurManager = null,
 
         // FIXME: replace with `zxdg_decoration_v1` once GTK merges
@@ -39,7 +41,7 @@ pub const App = struct {
         /// Connector name of the primary output (e.g., "DP-1") as reported
         /// by kde_output_order_v1. The first output in each priority list
         /// is the primary.
-        primary_output_name: ?[63:0]u8 = null,
+        primary_output_name: ?[max_output_name_len:0]u8 = null,
 
         /// Used to avoid repeatedly logging the same primary-name mismatch
         /// when we can't map the compositor connector name to a GDK monitor.
@@ -167,48 +169,48 @@ pub const App = struct {
         apprt_window: *ApprtWindow,
     ) ?*gdk.Monitor {
         const config = if (apprt_window.getConfig()) |v| v.get() else return null;
+
+        switch (config.@"quick-terminal-screen") {
+            .mouse => return null,
+            .main, .@"macos-menu-bar" => {},
+        }
+
         const display = apprt_window.as(gtk.Widget).getDisplay();
+        const monitors = display.getMonitors();
 
-        return switch (config.@"quick-terminal-screen") {
-            .mouse => null,
-            .main, .@"macos-menu-bar" => blk: {
-                const monitors = display.getMonitors();
-
-                // Try to find the monitor matching the primary output name.
-                if (context.primary_output_name) |*stored_name| {
-                    const name = std.mem.sliceTo(stored_name, 0);
-                    var i: u32 = 0;
-                    while (monitors.getObject(i)) |item| : (i += 1) {
-                        const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
-                            item.unref();
-                            continue;
-                        };
-                        if (monitor.getConnector()) |connector_z| {
-                            const connector = std.mem.sliceTo(connector_z, 0);
-                            if (std.mem.eql(u8, connector, name)) {
-                                context.primary_output_match_failed_logged = false;
-                                break :blk monitor;
-                            }
-                        }
-                        monitor.unref();
-                    }
-
-                    if (!context.primary_output_match_failed_logged) {
-                        context.primary_output_match_failed_logged = true;
-                        log.debug(
-                            "could not match primary output connector to a GDK monitor; falling back to first monitor",
-                            .{},
-                        );
+        // Try to find the monitor matching the primary output name.
+        if (context.primary_output_name) |*stored_name| {
+            const name = std.mem.sliceTo(stored_name, 0);
+            var i: u32 = 0;
+            while (monitors.getObject(i)) |item| : (i += 1) {
+                const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
+                    item.unref();
+                    continue;
+                };
+                if (monitor.getConnector()) |connector_z| {
+                    const connector = std.mem.sliceTo(connector_z, 0);
+                    if (std.mem.eql(u8, connector, name)) {
+                        context.primary_output_match_failed_logged = false;
+                        return monitor;
                     }
                 }
+                monitor.unref();
+            }
 
-                // Fall back to the first monitor in the list.
-                const first = monitors.getObject(0) orelse break :blk null;
-                break :blk gobject.ext.cast(gdk.Monitor, first) orelse {
-                    first.unref();
-                    break :blk null;
-                };
-            },
+            if (!context.primary_output_match_failed_logged) {
+                context.primary_output_match_failed_logged = true;
+                log.debug(
+                    "could not match primary output connector to a GDK monitor; falling back to first monitor",
+                    .{},
+                );
+            }
+        }
+
+        // Fall back to the first monitor in the list.
+        const first = monitors.getObject(0) orelse return null;
+        return gobject.ext.cast(gdk.Monitor, first) orelse {
+            first.unref();
+            return null;
         };
     }
 
@@ -344,23 +346,25 @@ pub const App = struct {
     ) void {
         switch (event) {
             .output => |v| {
-                if (context.output_order_done) {
-                    context.output_order_done = false;
-                    context.output_order_seen_output = true;
-                    context.primary_output_match_failed_logged = false;
-                    const name = std.mem.sliceTo(v.output_name, 0);
-                    if (name.len == 0) {
-                        context.primary_output_name = null;
-                        log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
-                    } else if (name.len <= 63) {
-                        var buf: [63:0]u8 = @splat(0);
-                        @memcpy(buf[0..name.len], name);
-                        context.primary_output_name = buf;
-                        log.debug("primary output: {s}", .{name});
-                    } else {
-                        context.primary_output_name = null;
-                        log.warn("ignoring primary output name longer than 63 bytes from kde_output_order_v1", .{});
-                    }
+                // Only the first output event after a `done` is the new primary.
+                if (!context.output_order_done) return;
+                context.output_order_done = false;
+                context.output_order_seen_output = true;
+                // A new primary invalidates any cached match-failure state.
+                context.primary_output_match_failed_logged = false;
+
+                const name = std.mem.sliceTo(v.output_name, 0);
+                if (name.len == 0) {
+                    context.primary_output_name = null;
+                    log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
+                } else if (name.len <= Context.max_output_name_len) {
+                    var buf: [Context.max_output_name_len:0]u8 = @splat(0);
+                    @memcpy(buf[0..name.len], name);
+                    context.primary_output_name = buf;
+                    log.debug("primary output: {s}", .{name});
+                } else {
+                    context.primary_output_name = null;
+                    log.warn("ignoring primary output name longer than {} bytes from kde_output_order_v1", .{Context.max_output_name_len});
                 }
             },
             .done => {
