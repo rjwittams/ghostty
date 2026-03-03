@@ -178,7 +178,6 @@ pub const App = struct {
 
         // Try to find the monitor matching the primary output name.
         if (context.primary_output_name) |*stored_name| {
-            const name = std.mem.sliceTo(stored_name, 0);
             var i: u32 = 0;
             while (monitors.getObject(i)) |item| : (i += 1) {
                 const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
@@ -186,8 +185,7 @@ pub const App = struct {
                     continue;
                 };
                 if (monitor.getConnector()) |connector_z| {
-                    const connector = std.mem.sliceTo(connector_z, 0);
-                    if (std.mem.eql(u8, connector, name)) {
+                    if (std.mem.orderZ(u8, connector_z, stored_name) == .eq) {
                         context.primary_output_match_failed_logged = false;
                         return monitor;
                     }
@@ -282,6 +280,11 @@ pub const App = struct {
 
                         // Already bound: skip duplicate, allow replacement for
                         // protocols tracked by registry global name.
+                        // Compositors may re-advertise globals at runtime
+                        // (e.g. when a display server component restarts).
+                        // For protocols with a stored global name we detect
+                        // replacement (different name) vs harmless duplicate
+                        // (same name); simple protocols just keep the first.
                         if (existing_global != null) {
                             if (global_name_field != null) {
                                 if (existing_global_name != null and existing_global_name.? == v.name) {

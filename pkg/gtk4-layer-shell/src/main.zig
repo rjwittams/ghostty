@@ -63,7 +63,7 @@ pub fn setKeyboardMode(window: *gtk.Window, mode: KeyboardMode) void {
 }
 
 pub fn setMonitor(window: *gtk.Window, monitor: ?*gdk.Monitor) void {
-    c.gtk_layer_set_monitor(@ptrCast(window), if (monitor) |m| @ptrCast(m) else null);
+    c.gtk_layer_set_monitor(@ptrCast(window), @ptrCast(monitor));
 }
 
 pub fn setNamespace(window: *gtk.Window, name: [:0]const u8) void {
