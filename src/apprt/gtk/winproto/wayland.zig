@@ -45,10 +45,6 @@ pub const App = struct {
         /// is the primary.
         primary_output_name: ?[max_output_name_len:0]u8 = null,
 
-        /// Used to avoid repeatedly logging the same primary-name mismatch
-        /// when we can't map the compositor connector name to a GDK monitor.
-        primary_output_match_failed_logged: bool = false,
-
         /// Tracks the output order event cycle. Set to true after a `done`
         /// event so the next `output` event is captured as the new primary.
         /// Initialized to true so the first event after binding is captured.
@@ -186,19 +182,10 @@ pub const App = struct {
                 };
                 if (monitor.getConnector()) |connector_z| {
                     if (std.mem.orderZ(u8, connector_z, stored_name) == .eq) {
-                        context.primary_output_match_failed_logged = false;
                         return monitor;
                     }
                 }
                 monitor.unref();
-            }
-
-            if (!context.primary_output_match_failed_logged) {
-                context.primary_output_match_failed_logged = true;
-                log.debug(
-                    "could not match primary output connector to a GDK monitor; falling back to first monitor",
-                    .{},
-                );
             }
         }
 
@@ -240,7 +227,6 @@ pub const App = struct {
     /// Reset cached state derived from kde_output_order_v1.
     fn resetOutputOrderState(context: *Context) void {
         context.primary_output_name = null;
-        context.primary_output_match_failed_logged = false;
         context.output_order_done = true;
     }
 
@@ -271,38 +257,6 @@ pub const App = struct {
                     if (std.mem.orderZ(u8, v.interface, T.interface.name) == .eq) {
                         log.debug("matched {}", .{T});
 
-                        const existing_global = @field(context, field.name);
-                        const global_name_field = comptime getGlobalNameField(field.name);
-                        const existing_global_name: ?u32 = if (global_name_field) |name_field|
-                            @field(context, name_field)
-                        else
-                            null;
-
-                        // Already bound: skip duplicate, allow replacement for
-                        // protocols tracked by registry global name.
-                        // Compositors may re-advertise globals at runtime
-                        // (e.g. when a display server component restarts).
-                        // For protocols with a stored global name we detect
-                        // replacement (different name) vs harmless duplicate
-                        // (same name); simple protocols just keep the first.
-                        if (existing_global != null) {
-                            if (global_name_field != null) {
-                                if (existing_global_name != null and existing_global_name.? == v.name) {
-                                    log.debug(
-                                        "duplicate global for {s} with name={}; keeping existing binding",
-                                        .{ v.interface, v.name },
-                                    );
-                                    break;
-                                }
-                            } else {
-                                log.warn(
-                                    "duplicate global for {s}; keeping existing binding",
-                                    .{v.interface},
-                                );
-                                break;
-                            }
-                        }
-
                         const global = registry.bind(
                             v.name,
                             T,
@@ -315,22 +269,18 @@ pub const App = struct {
                             return;
                         };
 
-                        if (existing_global) |old| {
-                            log.debug(
-                                "replacement global for {s}; switching old_name={} to new_name={}",
-                                .{ v.interface, existing_global_name orelse 0, v.name },
-                            );
+                        // Destroy old binding if this global was re-advertised.
+                        // Bind first so a failed bind preserves the old binding.
+                        if (@field(context, field.name)) |old| {
                             old.destroy();
 
                             if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                                // Replacement means the previous primary may be stale
-                                // until the new object sends a fresh cycle.
                                 resetOutputOrderState(context);
                             }
                         }
 
                         @field(context, field.name) = global;
-                        if (global_name_field) |name_field| {
+                        if (comptime getGlobalNameField(field.name)) |name_field| {
                             @field(context, name_field) = v.name;
                         }
 
@@ -405,8 +355,6 @@ pub const App = struct {
                 // Only the first output event after a `done` is the new primary.
                 if (!context.output_order_done) return;
                 context.output_order_done = false;
-                // A new primary invalidates any cached match-failure state.
-                context.primary_output_match_failed_logged = false;
 
                 const name = std.mem.sliceTo(v.output_name, 0);
                 if (name.len == 0) {
