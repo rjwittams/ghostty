@@ -26,7 +26,7 @@ pub const App = struct {
     context: *Context,
 
     const Context = struct {
-        const max_output_name_len = 63;
+        alloc: Allocator,
 
         kde_blur_manager: ?*org.KdeKwinBlurManager = null,
 
@@ -43,7 +43,7 @@ pub const App = struct {
         /// Connector name of the primary output (e.g., "DP-1") as reported
         /// by kde_output_order_v1. The first output in each priority list
         /// is the primary.
-        primary_output_name: ?[max_output_name_len:0]u8 = null,
+        primary_output_name: ?[:0]const u8 = null,
 
         /// Tracks the output order event cycle. Set to true after a `done`
         /// event so the next `output` event is captured as the new primary.
@@ -91,8 +91,11 @@ pub const App = struct {
         // a stable pointer, but it's too scary that we'd need one in the future
         // and not have it and corrupt memory or something so let's just do it.
         const context = try alloc.create(Context);
-        errdefer alloc.destroy(context);
-        context.* = .{};
+        errdefer {
+            if (context.primary_output_name) |name| alloc.free(name);
+            alloc.destroy(context);
+        }
+        context.* = .{ .alloc = alloc };
 
         // Get our display registry so we can get all the available interfaces
         // and bind to what we need.
@@ -114,6 +117,7 @@ pub const App = struct {
     }
 
     pub fn deinit(self: *App, alloc: Allocator) void {
+        if (self.context.primary_output_name) |name| alloc.free(name);
         alloc.destroy(self.context);
     }
 
@@ -173,7 +177,7 @@ pub const App = struct {
         const monitors = display.getMonitors();
 
         // Try to find the monitor matching the primary output name.
-        if (context.primary_output_name) |*stored_name| {
+        if (context.primary_output_name) |stored_name| {
             var i: u32 = 0;
             while (monitors.getObject(i)) |item| : (i += 1) {
                 const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
@@ -201,7 +205,7 @@ pub const App = struct {
         // Globals should be optional pointers
         const T = switch (@typeInfo(field.type)) {
             .optional => |o| switch (@typeInfo(o.child)) {
-                .pointer => |v| v.child,
+                .pointer => |v| if (v.size == .one) v.child else return null,
                 else => return null,
             },
             else => return null,
@@ -226,6 +230,7 @@ pub const App = struct {
 
     /// Reset cached state derived from kde_output_order_v1.
     fn resetOutputOrderState(context: *Context) void {
+        if (context.primary_output_name) |name| context.alloc.free(name);
         context.primary_output_name = null;
         context.output_order_done = true;
     }
@@ -357,17 +362,18 @@ pub const App = struct {
                 context.output_order_done = false;
 
                 const name = std.mem.sliceTo(v.output_name, 0);
+                if (context.primary_output_name) |old| context.alloc.free(old);
+
                 if (name.len == 0) {
                     context.primary_output_name = null;
                     log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
-                } else if (name.len <= Context.max_output_name_len) {
-                    var buf: [Context.max_output_name_len:0]u8 = @splat(0);
-                    @memcpy(buf[0..name.len], name);
-                    context.primary_output_name = buf;
-                    log.debug("primary output: {s}", .{name});
                 } else {
-                    context.primary_output_name = null;
-                    log.warn("ignoring primary output name longer than {} bytes from kde_output_order_v1", .{Context.max_output_name_len});
+                    context.primary_output_name = context.alloc.dupeZ(u8, name) catch |err| {
+                        context.primary_output_name = null;
+                        log.warn("failed to allocate primary output name: {}", .{err});
+                        return;
+                    };
+                    log.debug("primary output: {s}", .{name});
                 }
             },
             .done => {
