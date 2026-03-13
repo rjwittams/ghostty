@@ -4,6 +4,7 @@ pub const key_event = @import("key_event.zig");
 pub const key_encode = @import("key_encode.zig");
 pub const paste = @import("paste.zig");
 pub const sgr = @import("sgr.zig");
+pub const terminal = @import("terminal.zig");
 
 // The full C API, unexported.
 pub const osc_new = osc.new;
@@ -52,6 +53,9 @@ pub const key_encoder_encode = key_encode.encode;
 
 pub const paste_is_safe = paste.is_safe;
 
+pub const terminal_new = terminal.new;
+pub const terminal_free = terminal.free;
+
 test {
     _ = color;
     _ = osc;
@@ -59,6 +63,7 @@ test {
     _ = key_encode;
     _ = paste;
     _ = sgr;
+    _ = terminal;
 
     // We want to make sure we run the tests for the C allocator interface.
     _ = @import("../../lib/allocator.zig");

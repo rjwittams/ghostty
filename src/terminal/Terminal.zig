@@ -271,7 +271,7 @@ pub fn vtHandler(self: *Terminal) ReadonlyHandler {
 }
 
 /// The general allocator we should use for this terminal.
-fn gpa(self: *Terminal) Allocator {
+pub fn gpa(self: *Terminal) Allocator {
     return self.screens.active.alloc;
 }
 
