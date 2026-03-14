@@ -82,6 +82,17 @@ pub fn scroll_viewport(
     });
 }
 
+pub fn resize(
+    terminal_: Terminal,
+    cols: size.CellCountInt,
+    rows: size.CellCountInt,
+) callconv(.c) Result {
+    const t = terminal_ orelse return .invalid_value;
+    if (cols == 0 or rows == 0) return .invalid_value;
+    t.resize(t.gpa(), cols, rows) catch return .out_of_memory;
+    return .success;
+}
+
 pub fn free(terminal_: Terminal) callconv(.c) void {
     const t = terminal_ orelse return;
 
@@ -190,6 +201,45 @@ test "scroll_viewport" {
 
 test "scroll_viewport null" {
     scroll_viewport(null, .{ .tag = .top, .value = undefined });
+}
+
+test "resize" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    try testing.expectEqual(Result.success, resize(t, 40, 12));
+    try testing.expectEqual(40, t.?.cols);
+    try testing.expectEqual(12, t.?.rows);
+}
+
+test "resize null" {
+    try testing.expectEqual(Result.invalid_value, resize(null, 80, 24));
+}
+
+test "resize invalid value" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    try testing.expectEqual(Result.invalid_value, resize(t, 0, 24));
+    try testing.expectEqual(Result.invalid_value, resize(t, 80, 0));
 }
 
 test "vt_write" {

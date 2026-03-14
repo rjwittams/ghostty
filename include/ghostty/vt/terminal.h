@@ -119,6 +119,24 @@ GhosttyResult ghostty_terminal_new(const GhosttyAllocator* allocator,
 void ghostty_terminal_free(GhosttyTerminal terminal);
 
 /**
+ * Resize the terminal to the given dimensions.
+ *
+ * Changes the number of columns and rows in the terminal. The primary
+ * screen will reflow content if wraparound mode is enabled; the alternate
+ * screen does not reflow. If the dimensions are unchanged, this is a no-op.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param cols New width in cells (must be greater than zero)
+ * @param rows New height in cells (must be greater than zero)
+ * @return GHOSTTY_SUCCESS on success, or an error code on failure
+ *
+ * @ingroup terminal
+ */
+GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
+                                      uint16_t cols,
+                                      uint16_t rows);
+
+/**
  * Write VT-encoded data to the terminal for processing.
  *
  * Feeds raw bytes through the terminal's VT stream parser, updating
