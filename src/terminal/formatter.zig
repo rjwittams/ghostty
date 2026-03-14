@@ -688,7 +688,7 @@ pub const ScreenFormatter = struct {
                         .y = last.y,
                     };
                 } else self.screen.pages.getTopLeft(.screen),
-                discarding.count,
+                std.math.cast(usize, discarding.count) orelse return error.WriteFailed,
             ) catch return error.WriteFailed;
         }
     }
@@ -1234,7 +1234,10 @@ pub const PageFormatter = struct {
                             &discarding.writer,
                             &style,
                         );
-                        for (0..discarding.count) |_| map.map.append(map.alloc, .{
+                        for (0..std.math.cast(
+                            usize,
+                            discarding.count,
+                        ) orelse return error.WriteFailed) |_| map.map.append(map.alloc, .{
                             .x = x,
                             .y = y,
                         }) catch return error.WriteFailed;
@@ -1291,7 +1294,10 @@ pub const PageFormatter = struct {
                             &discarding.writer,
                             uri,
                         );
-                        for (0..discarding.count) |_| map.map.append(map.alloc, .{
+                        for (0..std.math.cast(
+                            usize,
+                            discarding.count,
+                        ) orelse return error.WriteFailed) |_| map.map.append(map.alloc, .{
                             .x = x,
                             .y = y,
                         }) catch return error.WriteFailed;
@@ -1309,7 +1315,10 @@ pub const PageFormatter = struct {
                         if (self.point_map) |*map| {
                             var discarding: std.Io.Writer.Discarding = .init(&.{});
                             try self.writeCell(tag, &discarding.writer, cell);
-                            for (0..discarding.count) |_| map.map.append(map.alloc, .{
+                            for (0..std.math.cast(
+                                usize,
+                                discarding.count,
+                            ) orelse return error.WriteFailed) |_| map.map.append(map.alloc, .{
                                 .x = x,
                                 .y = y,
                             }) catch return error.WriteFailed;
