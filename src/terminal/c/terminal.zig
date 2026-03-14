@@ -57,6 +57,16 @@ fn new_(
     return ptr;
 }
 
+pub fn vt_write(
+    terminal_: Terminal,
+    ptr: [*]const u8,
+    len: usize,
+) callconv(.c) void {
+    const t = terminal_ orelse return;
+    var stream = t.vtStream();
+    stream.nextSlice(ptr[0..len]);
+}
+
 pub fn free(terminal_: Terminal) callconv(.c) void {
     const t = terminal_ orelse return;
 
@@ -109,4 +119,24 @@ test "new invalid value" {
 
 test "free null" {
     free(null);
+}
+
+test "vt_write" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    vt_write(t, "Hello", 5);
+
+    const str = try t.?.plainString(testing.allocator);
+    defer testing.allocator.free(str);
+    try testing.expectEqualStrings("Hello", str);
 }

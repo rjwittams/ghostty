@@ -79,6 +79,32 @@ GhosttyResult ghostty_terminal_new(const GhosttyAllocator* allocator,
  */
 void ghostty_terminal_free(GhosttyTerminal terminal);
 
+/**
+ * Write VT-encoded data to the terminal for processing.
+ *
+ * Feeds raw bytes through the terminal's VT stream parser, updating
+ * terminal state accordingly. Only read-only sequences are processed;
+ * sequences that require output (queries) are ignored.
+ *
+ * In the future, a callback-based API will be added to allow handling
+ * of output or side effect sequences.
+ *
+ * This never fails. Any erroneous input or errors in processing the
+ * input are logged internally but do not cause this function to fail
+ * because this input is assumed to be untrusted and from an external
+ * source; so the primary goal is to keep the terminal state consistent and 
+ * not allow malformed input to corrupt or crash.
+ *
+ * @param terminal The terminal handle
+ * @param data Pointer to the data to write
+ * @param len Length of the data in bytes
+ *
+ * @ingroup terminal
+ */
+void ghostty_terminal_vt_write(GhosttyTerminal terminal,
+                               const uint8_t* data,
+                               size_t len);
+
 /** @} */
 
 #ifdef __cplusplus

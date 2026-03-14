@@ -55,6 +55,7 @@ pub const paste_is_safe = paste.is_safe;
 
 pub const terminal_new = terminal.new;
 pub const terminal_free = terminal.free;
+pub const terminal_vt_write = terminal.vt_write;
 
 test {
     _ = color;

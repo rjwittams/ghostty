@@ -145,6 +145,7 @@ comptime {
         @export(&c.sgr_attribute_value, .{ .name = "ghostty_sgr_attribute_value" });
         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+        @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
 
         // On Wasm we need to export our allocator convenience functions.
         if (builtin.target.cpu.arch.isWasm()) {
