@@ -28,7 +28,7 @@
  * @section groups_sec API Reference
  *
  * The API is organized into the following groups:
- * - @ref terminal "Terminal Lifecycle" - Create and destroy terminal instances
+ * - @ref terminal "Terminal" - Complete terminal emulator state and rendering
  * - @ref key "Key Encoding" - Encode key events into terminal sequences
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences

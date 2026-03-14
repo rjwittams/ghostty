@@ -1,7 +1,7 @@
 /**
  * @file terminal.h
  *
- * Terminal lifecycle management.
+ * Complete terminal emulator state and rendering.
  */
 
 #ifndef GHOSTTY_VT_TERMINAL_H
@@ -16,12 +16,12 @@
 extern "C" {
 #endif
 
-/** @defgroup terminal Terminal Lifecycle
+/** @defgroup terminal Terminal
  *
- * Minimal API for creating and destroying terminal instances.
+ * Complete terminal emulator state and rendering.
  *
- * This currently only exposes lifecycle operations. Additional terminal
- * APIs will be added over time.
+ * A terminal instance manages the full emulator state including the screen,
+ * scrollback, cursor, styles, modes, and VT stream processing.
  *
  * @{
  */
