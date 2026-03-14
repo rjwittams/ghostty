@@ -27,6 +27,7 @@ pub const Format = formatterpkg.Format;
 pub const ScreenOptions = extern struct {
     /// C: GhosttyFormatterScreenExtra
     pub const Extra = extern struct {
+        size: usize = @sizeOf(Extra),
         cursor: bool,
         style: bool,
         hyperlink: bool,
@@ -56,6 +57,7 @@ pub const ScreenOptions = extern struct {
 
 /// C: GhosttyFormatterTerminalOptions
 pub const TerminalOptions = extern struct {
+    size: usize = @sizeOf(TerminalOptions),
     emit: Format,
     unwrap: bool,
     trim: bool,
@@ -63,6 +65,7 @@ pub const TerminalOptions = extern struct {
 
     /// C: GhosttyFormatterTerminalExtra
     pub const Extra = extern struct {
+        size: usize = @sizeOf(Extra),
         palette: bool,
         modes: bool,
         scrolling_region: bool,

@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <ghostty/vt/allocator.h>
-#include <ghostty/vt/result.h>
+#include <ghostty/vt/types.h>
 #include <ghostty/vt/terminal.h>
 
 #ifdef __cplusplus
@@ -53,6 +53,9 @@ typedef enum {
  * @ingroup formatter
  */
 typedef struct {
+  /** Size of this struct in bytes. Must be set to sizeof(GhosttyFormatterScreenExtra). */
+  size_t size;
+
   /** Emit cursor position using CUP (CSI H). */
   bool cursor;
 
@@ -78,6 +81,9 @@ typedef struct {
  * @ingroup formatter
  */
 typedef struct {
+  /** Size of this struct in bytes. Must be set to sizeof(GhosttyFormatterTerminalExtra). */
+  size_t size;
+
   /** Emit the palette using OSC 4 sequences. */
   bool palette;
 
@@ -113,6 +119,9 @@ typedef struct GhosttyFormatter* GhosttyFormatter;
  * @ingroup formatter
  */
 typedef struct {
+  /** Size of this struct in bytes. Must be set to sizeof(GhosttyFormatterTerminalOptions). */
+  size_t size;
+
   /** Output format to emit. */
   GhosttyFormatterFormat emit;
 

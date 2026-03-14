@@ -73,7 +73,7 @@
 extern "C" {
 #endif
 
-#include <ghostty/vt/result.h>
+#include <ghostty/vt/types.h>
 #include <ghostty/vt/allocator.h>
 #include <ghostty/vt/formatter.h>
 #include <ghostty/vt/terminal.h>
