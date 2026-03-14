@@ -93,6 +93,11 @@ pub fn resize(
     return .success;
 }
 
+pub fn reset(terminal_: Terminal) callconv(.c) void {
+    const t = terminal_ orelse return;
+    t.fullReset();
+}
+
 pub fn free(terminal_: Terminal) callconv(.c) void {
     const t = terminal_ orelse return;
 
@@ -201,6 +206,31 @@ test "scroll_viewport" {
 
 test "scroll_viewport null" {
     scroll_viewport(null, .{ .tag = .top, .value = undefined });
+}
+
+test "reset" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    vt_write(t, "Hello", 5);
+    reset(t);
+
+    const str = try t.?.plainString(testing.allocator);
+    defer testing.allocator.free(str);
+    try testing.expectEqualStrings("", str);
+}
+
+test "reset null" {
+    reset(null);
 }
 
 test "resize" {

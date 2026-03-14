@@ -119,6 +119,19 @@ GhosttyResult ghostty_terminal_new(const GhosttyAllocator* allocator,
 void ghostty_terminal_free(GhosttyTerminal terminal);
 
 /**
+ * Perform a full reset of the terminal (RIS).
+ *
+ * Resets all terminal state back to its initial configuration, including
+ * modes, scrollback, scrolling region, and screen contents. The terminal
+ * dimensions are preserved.
+ *
+ * @param terminal The terminal handle (may be NULL, in which case this is a no-op)
+ *
+ * @ingroup terminal
+ */
+void ghostty_terminal_reset(GhosttyTerminal terminal);
+
+/**
  * Resize the terminal to the given dimensions.
  *
  * Changes the number of columns and rows in the terminal. The primary
