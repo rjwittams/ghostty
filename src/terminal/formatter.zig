@@ -1,5 +1,8 @@
 const std = @import("std");
+const build_options = @import("terminal_options");
 const assert = @import("../quirks.zig").inlineAssert;
+const lib = @import("../lib/main.zig");
+const lib_target: lib.Target = if (build_options.c_abi) .c else .zig;
 const Allocator = std.mem.Allocator;
 const color = @import("color.zig");
 const size = @import("size.zig");
@@ -19,46 +22,47 @@ const Selection = @import("Selection.zig");
 const Style = @import("style.zig").Style;
 
 /// Formats available.
-pub const Format = enum {
-    /// Plain text.
-    plain,
+pub const Format = lib.Enum(lib_target, &.{
+    // Plain text.
+    "plain",
 
-    /// Include VT sequences to preserve colors, styles, URLs, etc.
-    /// This is predominantly SGR sequences but may contain others as needed.
-    ///
-    /// Note that for reference colors, like palette indices, this will
-    /// vary based on the formatter and you should see the docs. For example,
-    /// PageFormatter with VT will emit SGR sequences with palette indices,
-    /// not the color itself.
-    ///
-    /// For VT, newlines will be emitted as `\r\n` so that the cursor properly
-    /// moves back to the beginning prior emitting follow-up lines.
-    vt,
+    // Include VT sequences to preserve colors, styles, URLs, etc.
+    // This is predominantly SGR sequences but may contain others as needed.
+    //
+    // Note that for reference colors, like palette indices, this will
+    // vary based on the formatter and you should see the docs. For example,
+    // PageFormatter with VT will emit SGR sequences with palette indices,
+    // not the color itself.
+    //
+    // For VT, newlines will be emitted as `\r\n` so that the cursor properly
+    // moves back to the beginning prior emitting follow-up lines.
+    "vt",
 
-    /// HTML output.
-    ///
-    /// This will emit inline styles for as much styling as possible,
-    /// in the interest of simplicity and ease of editing. This isn't meant
-    /// to build the most beautiful or efficient HTML, but rather to be
-    /// stylistically correct.
-    ///
-    /// For colors, RGB values are emitted as inline CSS (#RRGGBB) while palette
-    /// indices use CSS variables (var(--vt-palette-N)). The palette colors are
-    /// emitted by TerminalFormatter.Extra.palette as a <style> block if you
-    /// want to also include that. But if you only format a screen or lower,
-    /// the formatter doesn't have access to the current palette to render it.
-    ///
-    /// Newlines are emitted as actual '\n' characters. Consumers should use
-    /// CSS white-space: pre or pre-wrap to preserve spacing and alignment.
-    html,
+    // HTML output.
+    //
+    // This will emit inline styles for as much styling as possible,
+    // in the interest of simplicity and ease of editing. This isn't meant
+    // to build the most beautiful or efficient HTML, but rather to be
+    // stylistically correct.
+    //
+    // For colors, RGB values are emitted as inline CSS (#RRGGBB) while palette
+    // indices use CSS variables (var(--vt-palette-N)). The palette colors are
+    // emitted by TerminalFormatter.Extra.palette as a <style> block if you
+    // want to also include that. But if you only format a screen or lower,
+    // the formatter doesn't have access to the current palette to render it.
+    //
+    // Newlines are emitted as actual '\n' characters. Consumers should use
+    // CSS white-space: pre or pre-wrap to preserve spacing and alignment.
+    "html",
+});
 
-    pub fn styled(self: Format) bool {
-        return switch (self) {
-            .plain => false,
-            .html, .vt => true,
-        };
-    }
-};
+/// Returns true if the format emits styled output (not plaintext).
+pub fn formatStyled(fmt: Format) bool {
+    return switch (fmt) {
+        .plain => false,
+        .html, .vt => true,
+    };
+}
 
 pub const CodepointMap = struct {
     /// Unicode codepoint range to replace.
@@ -1130,7 +1134,7 @@ pub const PageFormatter = struct {
                     // If we're emitting styled output (not plaintext) and
                     // the cell has some kind of styling or is not empty
                     // then this isn't blank.
-                    if (self.opts.emit.styled() and
+                    if (formatStyled(self.opts.emit) and
                         (!cell.isEmpty() or cell.hasStyling())) break :blank;
 
                     // Cells with no text are blank
@@ -1186,7 +1190,7 @@ pub const PageFormatter = struct {
                 style: {
                     // If we aren't emitting styled output then we don't
                     // have to worry about styles.
-                    if (!self.opts.emit.styled()) break :style;
+                    if (!formatStyled(self.opts.emit)) break :style;
 
                     // Get our cell style.
                     const cell_style = self.cellStyle(cell);
