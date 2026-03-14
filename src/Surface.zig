@@ -324,7 +324,7 @@ const DerivedConfig = struct {
     window_padding_bottom: u32,
     window_padding_left: u32,
     window_padding_right: u32,
-    window_padding_balance: bool,
+    window_padding_balance: configpkg.Config.WindowPaddingBalance,
     window_height: u32,
     window_width: u32,
     title: ?[:0]const u8,
@@ -536,8 +536,8 @@ pub fn init(
             x_dpi,
             y_dpi,
         );
-        if (derived_config.window_padding_balance) {
-            size.balancePadding(explicit);
+        if (derived_config.window_padding_balance != .false) {
+            size.balancePadding(explicit, derived_config.window_padding_balance);
         } else {
             size.padding = explicit;
         }
@@ -2462,11 +2462,11 @@ fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
 
 /// Recalculate the balanced padding if needed.
 fn balancePaddingIfNeeded(self: *Surface) void {
-    if (!self.config.window_padding_balance) return;
+    if (self.config.window_padding_balance == .false) return;
     const content_scale = try self.rt_surface.getContentScale();
     const x_dpi = content_scale.x * font.face.default_dpi;
     const y_dpi = content_scale.y * font.face.default_dpi;
-    self.size.balancePadding(self.config.scaledPadding(x_dpi, y_dpi));
+    self.size.balancePadding(self.config.scaledPadding(x_dpi, y_dpi), self.config.window_padding_balance);
 }
 
 /// Called to set the preedit state for character input. Preedit is used
@@ -3576,7 +3576,7 @@ pub fn contentScaleCallback(self: *Surface, content_scale: apprt.ContentScale) !
 
     // Update our padding which is dependent on DPI. We only do this for
     // unbalanced padding since balanced padding is not dependent on DPI.
-    if (!self.config.window_padding_balance) {
+    if (self.config.window_padding_balance == .false) {
         self.size.padding = self.config.scaledPadding(x_dpi, y_dpi);
     }
 

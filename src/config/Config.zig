@@ -1963,7 +1963,16 @@ keybind: Keybinds = .{},
 /// apply. The other padding is applied first and may affect how many grid cells
 /// actually exist, and this is applied last in order to balance the padding
 /// given a certain viewport size and grid cell size.
-@"window-padding-balance": bool = false,
+///
+/// Valid values are:
+///
+/// * `false` - No balancing is applied.
+/// * `true` - Balance the padding, but cap the top padding to avoid
+///   excessive space above the first row. Any excess is shifted to the
+///   bottom.
+/// * `equal` - Balance the padding equally on all sides without any
+///   top-padding cap. (Available since: 1.4.0)
+@"window-padding-balance": WindowPaddingBalance = .false,
 
 /// The color of the padding area of the window. Valid values are:
 ///
@@ -5227,6 +5236,12 @@ pub const Fullscreen = enum(c_int) {
     @"non-native",
     @"non-native-visible-menu",
     @"non-native-padded-notch",
+};
+
+pub const WindowPaddingBalance = enum {
+    false,
+    true,
+    equal,
 };
 
 pub const WindowPaddingColor = enum {
