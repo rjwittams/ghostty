@@ -293,7 +293,7 @@ pub const TerminalFormatter = struct {
                 m.map.appendNTimes(
                     m.alloc,
                     self.terminal.screens.active.pages.getTopLeft(.screen),
-                    discarding.count,
+                    std.math.cast(usize, discarding.count) orelse return error.WriteFailed,
                 ) catch return error.WriteFailed;
             }
         }
@@ -331,7 +331,7 @@ pub const TerminalFormatter = struct {
                 m.map.appendNTimes(
                     m.alloc,
                     self.terminal.screens.active.pages.getTopLeft(.screen),
-                    discarding.count,
+                    std.math.cast(usize, discarding.count) orelse return error.WriteFailed,
                 ) catch return error.WriteFailed;
             }
         }
@@ -415,7 +415,7 @@ pub const TerminalFormatter = struct {
                             .y = last.y,
                         };
                     } else self.terminal.screens.active.pages.getTopLeft(.screen),
-                    discarding.count,
+                    std.math.cast(usize, discarding.count) orelse return error.WriteFailed,
                 ) catch return error.WriteFailed;
             }
         }
