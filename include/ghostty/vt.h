@@ -43,6 +43,7 @@
  * - @ref c-vt-key-encode/src/main.c - Key encoding example
  * - @ref c-vt-paste/src/main.c - Paste safety check example
  * - @ref c-vt-sgr/src/main.c - SGR parser example
+ * - @ref c-vt-formatter/src/main.c - Terminal formatter example
  *
  */
 
@@ -64,6 +65,12 @@
 /** @example c-vt-sgr/src/main.c
  * This example demonstrates how to use the SGR parser to parse terminal
  * styling sequences and extract text attributes like colors and underline styles.
+ */
+
+/** @example c-vt-formatter/src/main.c
+ * This example demonstrates how to use the terminal and formatter APIs to
+ * create a terminal, write VT-encoded content into it, and format the screen
+ * contents as plain text.
  */
 
 #ifndef GHOSTTY_VT_H
