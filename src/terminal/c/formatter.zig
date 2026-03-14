@@ -23,11 +23,35 @@ pub const Formatter = ?*FormatterWrapper;
 /// C: GhosttyFormatterFormat
 pub const Format = formatterpkg.Format;
 
-/// C: GhosttyFormatterExtra
-pub const Extra = enum(c_int) {
-    none = 0,
-    styles = 1,
-    all = 2,
+/// C: GhosttyFormatterScreenOptions
+pub const ScreenOptions = extern struct {
+    /// C: GhosttyFormatterScreenExtra
+    pub const Extra = extern struct {
+        cursor: bool,
+        style: bool,
+        hyperlink: bool,
+        protection: bool,
+        kitty_keyboard: bool,
+        charsets: bool,
+
+        comptime {
+            for (std.meta.fieldNames(formatterpkg.ScreenFormatter.Extra)) |name| {
+                if (!@hasField(Extra, name))
+                    @compileError("ScreenOptions.Extra missing field: " ++ name);
+            }
+        }
+
+        fn toZig(self: Extra) formatterpkg.ScreenFormatter.Extra {
+            return .{
+                .cursor = self.cursor,
+                .style = self.style,
+                .hyperlink = self.hyperlink,
+                .protection = self.protection,
+                .kitty_keyboard = self.kitty_keyboard,
+                .charsets = self.charsets,
+            };
+        }
+    };
 };
 
 /// C: GhosttyFormatterTerminalOptions
@@ -36,6 +60,36 @@ pub const TerminalOptions = extern struct {
     unwrap: bool,
     trim: bool,
     extra: Extra,
+
+    /// C: GhosttyFormatterTerminalExtra
+    pub const Extra = extern struct {
+        palette: bool,
+        modes: bool,
+        scrolling_region: bool,
+        tabstops: bool,
+        pwd: bool,
+        keyboard: bool,
+        screen: ScreenOptions.Extra,
+
+        comptime {
+            for (std.meta.fieldNames(formatterpkg.TerminalFormatter.Extra)) |name| {
+                if (!@hasField(Extra, name))
+                    @compileError("TerminalOptions.Extra missing field: " ++ name);
+            }
+        }
+
+        fn toZig(self: Extra) formatterpkg.TerminalFormatter.Extra {
+            return .{
+                .palette = self.palette,
+                .modes = self.modes,
+                .scrolling_region = self.scrolling_region,
+                .tabstops = self.tabstops,
+                .pwd = self.pwd,
+                .keyboard = self.keyboard,
+                .screen = self.screen.toZig(),
+            };
+        }
+    };
 };
 
 pub fn terminal_new(
@@ -74,18 +128,12 @@ fn terminal_new_(
         return error.OutOfMemory;
     errdefer alloc.destroy(ptr);
 
-    const extra: formatterpkg.TerminalFormatter.Extra = switch (opts.extra) {
-        .none => .none,
-        .styles => .styles,
-        .all => .all,
-    };
-
     var formatter: formatterpkg.TerminalFormatter = .init(t, .{
         .emit = opts.emit,
         .unwrap = opts.unwrap,
         .trim = opts.trim,
     });
-    formatter.extra = extra;
+    formatter.extra = opts.extra.toZig();
 
     ptr.* = .{
         .kind = .{ .terminal = formatter },
@@ -145,7 +193,7 @@ test "terminal_new/free" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     try testing.expect(f != null);
     free(f);
@@ -157,7 +205,7 @@ test "terminal_new invalid_value on null terminal" {
         &lib_alloc.test_allocator,
         &f,
         null,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     try testing.expect(f == null);
 }
@@ -182,7 +230,7 @@ test "format plain" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 
@@ -208,7 +256,7 @@ test "format reflects terminal changes" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 
@@ -240,7 +288,7 @@ test "format null returns required size" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 
@@ -272,7 +320,7 @@ test "format buffer too small" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 
@@ -305,7 +353,7 @@ test "format vt" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .vt, .unwrap = false, .trim = true, .extra = .styles },
+        .{ .emit = .vt, .unwrap = false, .trim = true, .extra = .{ .palette = true, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = true, .hyperlink = true, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 
@@ -332,7 +380,7 @@ test "format html" {
         &lib_alloc.test_allocator,
         &f,
         t,
-        .{ .emit = .html, .unwrap = false, .trim = true, .extra = .none },
+        .{ .emit = .html, .unwrap = false, .trim = true, .extra = .{ .palette = false, .modes = false, .scrolling_region = false, .tabstops = false, .pwd = false, .keyboard = false, .screen = .{ .cursor = false, .style = false, .hyperlink = false, .protection = false, .kitty_keyboard = false, .charsets = false } } },
     ));
     defer free(f);
 

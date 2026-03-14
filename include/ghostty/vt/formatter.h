@@ -48,20 +48,57 @@ typedef enum {
 } GhosttyFormatterFormat;
 
 /**
+ * Extra screen state to include in styled output.
+ *
+ * @ingroup formatter
+ */
+typedef struct {
+  /** Emit cursor position using CUP (CSI H). */
+  bool cursor;
+
+  /** Emit current SGR style state based on the cursor's active style_id. */
+  bool style;
+
+  /** Emit current hyperlink state using OSC 8 sequences. */
+  bool hyperlink;
+
+  /** Emit character protection mode using DECSCA. */
+  bool protection;
+
+  /** Emit Kitty keyboard protocol state using CSI > u and CSI = sequences. */
+  bool kitty_keyboard;
+
+  /** Emit character set designations and invocations. */
+  bool charsets;
+} GhosttyFormatterScreenExtra;
+
+/**
  * Extra terminal state to include in styled output.
  *
  * @ingroup formatter
  */
-typedef enum {
-  /** Emit no extra state. */
-  GHOSTTY_FORMATTER_EXTRA_NONE,
+typedef struct {
+  /** Emit the palette using OSC 4 sequences. */
+  bool palette;
 
-  /** Emit style-relevant state (palette, cursor style, hyperlinks). */
-  GHOSTTY_FORMATTER_EXTRA_STYLES,
+  /** Emit terminal modes that differ from their defaults using CSI h/l. */
+  bool modes;
 
-  /** Emit all state to reconstruct terminal as closely as possible. */
-  GHOSTTY_FORMATTER_EXTRA_ALL,
-} GhosttyFormatterExtra;
+  /** Emit scrolling region state using DECSTBM and DECSLRM sequences. */
+  bool scrolling_region;
+
+  /** Emit tabstop positions by clearing all tabs and setting each one. */
+  bool tabstops;
+
+  /** Emit the present working directory using OSC 7. */
+  bool pwd;
+
+  /** Emit keyboard modes such as ModifyOtherKeys. */
+  bool keyboard;
+
+  /** Screen-level extras. */
+  GhosttyFormatterScreenExtra screen;
+} GhosttyFormatterTerminalExtra;
 
 /**
  * Opaque handle to a formatter instance.
@@ -86,7 +123,7 @@ typedef struct {
   bool trim;
 
   /** Extra terminal state to include in styled output. */
-  GhosttyFormatterExtra extra;
+  GhosttyFormatterTerminalExtra extra;
 } GhosttyFormatterTerminalOptions;
 
 /**
