@@ -146,7 +146,7 @@ fn terminal_new_(
     return ptr;
 }
 
-pub fn format(
+pub fn format_buf(
     formatter_: Formatter,
     out_: ?[*]u8,
     out_len: usize,
@@ -173,6 +173,28 @@ pub fn format(
     }
 
     out_written.* = writer.end;
+    return .success;
+}
+
+pub fn format_alloc(
+    formatter_: Formatter,
+    alloc_: ?*const CAllocator,
+    out_ptr: *?[*]u8,
+    out_len: *usize,
+) callconv(.c) Result {
+    const wrapper = formatter_ orelse return .invalid_value;
+    const alloc = lib_alloc.default(alloc_);
+
+    var aw: std.Io.Writer.Allocating = .init(alloc);
+    defer aw.deinit();
+
+    switch (wrapper.kind) {
+        .terminal => |*t| t.format(&aw.writer) catch return .out_of_memory,
+    }
+
+    const buf = aw.toOwnedSlice() catch return .out_of_memory;
+    out_ptr.* = buf.ptr;
+    out_len.* = buf.len;
     return .success;
 }
 
@@ -239,7 +261,7 @@ test "format plain" {
 
     var buf: [1024]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expectEqualStrings("Hello", buf[0..written]);
 }
 
@@ -265,13 +287,13 @@ test "format reflects terminal changes" {
 
     var buf: [1024]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expectEqualStrings("Hello", buf[0..written]);
 
     // Write more data and re-format
     terminal_c.vt_write(t, "\r\nWorld", 7);
 
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expectEqualStrings("Hello\nWorld", buf[0..written]);
 }
 
@@ -297,13 +319,13 @@ test "format null returns required size" {
 
     // Pass null buffer to query required size
     var required: usize = 0;
-    try testing.expectEqual(Result.out_of_space, format(f, null, 0, &required));
+    try testing.expectEqual(Result.out_of_space, format_buf(f, null, 0, &required));
     try testing.expect(required > 0);
 
     // Now allocate and format
     var buf: [1024]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expectEqual(required, written);
 }
 
@@ -330,14 +352,14 @@ test "format buffer too small" {
     // Buffer too small
     var buf: [2]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.out_of_space, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.out_of_space, format_buf(f, &buf, buf.len, &written));
     // written contains the required size
     try testing.expectEqual(@as(usize, 5), written);
 }
 
 test "format null formatter" {
     var written: usize = 0;
-    try testing.expectEqual(Result.invalid_value, format(null, null, 0, &written));
+    try testing.expectEqual(Result.invalid_value, format_buf(null, null, 0, &written));
 }
 
 test "format vt" {
@@ -362,7 +384,7 @@ test "format vt" {
 
     var buf: [65536]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expect(written > 0);
     try testing.expect(std.mem.indexOf(u8, buf[0..written], "Test") != null);
 }
@@ -389,7 +411,7 @@ test "format html" {
 
     var buf: [65536]u8 = undefined;
     var written: usize = 0;
-    try testing.expectEqual(Result.success, format(f, &buf, buf.len, &written));
+    try testing.expectEqual(Result.success, format_buf(f, &buf, buf.len, &written));
     try testing.expect(written > 0);
     try testing.expect(std.mem.indexOf(u8, buf[0..written], "Html") != null);
 }

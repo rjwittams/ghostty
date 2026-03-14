@@ -176,10 +176,32 @@ GhosttyResult ghostty_formatter_terminal_new(
  *
  * @ingroup formatter
  */
-GhosttyResult ghostty_formatter_format(GhosttyFormatter formatter,
-                                       uint8_t* buf,
-                                       size_t buf_len,
-                                       size_t* out_written);
+GhosttyResult ghostty_formatter_format_buf(GhosttyFormatter formatter,
+                                           uint8_t* buf,
+                                           size_t buf_len,
+                                           size_t* out_written);
+
+/**
+ * Run the formatter and return an allocated buffer with the output.
+ *
+ * Each call formats the current terminal state. The buffer is allocated
+ * using the provided allocator (or the default allocator if NULL).
+ * The caller is responsible for freeing the returned buffer using the
+ * same allocator.
+ *
+ * @param formatter The formatter handle (must not be NULL)
+ * @param allocator Pointer to allocator, or NULL to use the default allocator
+ * @param out_ptr Pointer to receive the allocated buffer
+ * @param out_len Pointer to receive the length of the output in bytes
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_MEMORY on allocation
+ *         failure
+ *
+ * @ingroup formatter
+ */
+GhosttyResult ghostty_formatter_format_alloc(GhosttyFormatter formatter,
+                                             const GhosttyAllocator* allocator,
+                                             uint8_t** out_ptr,
+                                             size_t* out_len);
 
 /**
  * Free a formatter instance.
