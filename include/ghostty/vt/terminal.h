@@ -54,6 +54,45 @@ typedef struct {
 } GhosttyTerminalOptions;
 
 /**
+ * Scroll viewport behavior tag.
+ *
+ * @ingroup terminal
+ */
+typedef enum {
+  /** Scroll to the top of the scrollback. */
+  GHOSTTY_SCROLL_VIEWPORT_TOP,
+
+  /** Scroll to the bottom (active area). */
+  GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+
+  /** Scroll by a delta amount (up is negative). */
+  GHOSTTY_SCROLL_VIEWPORT_DELTA,
+} GhosttyTerminalScrollViewportTag;
+
+/**
+ * Scroll viewport value.
+ *
+ * @ingroup terminal
+ */
+typedef union {
+  /** Scroll delta (only used with GHOSTTY_SCROLL_VIEWPORT_DELTA). Up is negative. */
+  intptr_t delta;
+
+  /** Padding for ABI compatibility. Do not use. */
+  uint64_t _padding[2];
+} GhosttyTerminalScrollViewportValue;
+
+/**
+ * Tagged union for scroll viewport behavior.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  GhosttyTerminalScrollViewportTag tag;
+  GhosttyTerminalScrollViewportValue value;
+} GhosttyTerminalScrollViewport;
+
+/**
  * Create a new terminal instance.
  *
  * @param allocator Pointer to allocator, or NULL to use the default allocator
@@ -102,8 +141,24 @@ void ghostty_terminal_free(GhosttyTerminal terminal);
  * @ingroup terminal
  */
 void ghostty_terminal_vt_write(GhosttyTerminal terminal,
-                               const uint8_t* data,
-                               size_t len);
+                                const uint8_t* data,
+                                size_t len);
+
+/**
+ * Scroll the terminal viewport.
+ *
+ * Scrolls the terminal's viewport according to the given behavior.
+ * When using GHOSTTY_SCROLL_VIEWPORT_DELTA, set the delta field in
+ * the value union to specify the number of rows to scroll (negative
+ * for up, positive for down). For other behaviors, the value is ignored.
+ *
+ * @param terminal The terminal handle (may be NULL, in which case this is a no-op)
+ * @param behavior The scroll behavior as a tagged union
+ *
+ * @ingroup terminal
+ */
+void ghostty_terminal_scroll_viewport(GhosttyTerminal terminal,
+                                      GhosttyTerminalScrollViewport behavior);
 
 /** @} */
 

@@ -67,6 +67,21 @@ pub fn vt_write(
     stream.nextSlice(ptr[0..len]);
 }
 
+/// C: GhosttyTerminalScrollViewport
+pub const ScrollViewport = ZigTerminal.ScrollViewport.C;
+
+pub fn scroll_viewport(
+    terminal_: Terminal,
+    behavior: ScrollViewport,
+) callconv(.c) void {
+    const t = terminal_ orelse return;
+    t.scrollViewport(switch (behavior.tag) {
+        .top => .top,
+        .bottom => .bottom,
+        .delta => .{ .delta = behavior.value.delta },
+    });
+}
+
 pub fn free(terminal_: Terminal) callconv(.c) void {
     const t = terminal_ orelse return;
 
@@ -119,6 +134,62 @@ test "new invalid value" {
 
 test "free null" {
     free(null);
+}
+
+test "scroll_viewport" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 5,
+            .rows = 2,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    const zt = t.?;
+
+    // Write "hello" on the first line
+    vt_write(t, "hello", 5);
+
+    // Push "hello" into scrollback with 3 newlines (index = ESC D)
+    vt_write(t, "\x1bD\x1bD\x1bD", 6);
+    {
+        // Viewport should be empty now since hello scrolled off
+        const str = try zt.plainString(testing.allocator);
+        defer testing.allocator.free(str);
+        try testing.expectEqualStrings("", str);
+    }
+
+    // Scroll to top: "hello" should be visible again
+    scroll_viewport(t, .{ .tag = .top, .value = undefined });
+    {
+        const str = try zt.plainString(testing.allocator);
+        defer testing.allocator.free(str);
+        try testing.expectEqualStrings("hello", str);
+    }
+
+    // Scroll to bottom: viewport should be empty again
+    scroll_viewport(t, .{ .tag = .bottom, .value = undefined });
+    {
+        const str = try zt.plainString(testing.allocator);
+        defer testing.allocator.free(str);
+        try testing.expectEqualStrings("", str);
+    }
+
+    // Scroll up by delta to bring "hello" back into view
+    scroll_viewport(t, .{ .tag = .delta, .value = .{ .delta = -3 } });
+    {
+        const str = try zt.plainString(testing.allocator);
+        defer testing.allocator.free(str);
+        try testing.expectEqualStrings("hello", str);
+    }
+}
+
+test "scroll_viewport null" {
+    scroll_viewport(null, .{ .tag = .top, .value = undefined });
 }
 
 test "vt_write" {
