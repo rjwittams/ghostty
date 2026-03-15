@@ -23,6 +23,9 @@ extern "C" {
  * A terminal instance manages the full emulator state including the screen,
  * scrollback, cursor, styles, modes, and VT stream processing.
  *
+ * Once a terminal session is up and running, you can configure a key encoder
+ * to write keyboard input via ghostty_key_encoder_setopt_from_terminal().
+ *
  * @{
  */
 

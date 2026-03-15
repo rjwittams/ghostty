@@ -124,6 +124,7 @@ comptime {
         @export(&c.key_encoder_new, .{ .name = "ghostty_key_encoder_new" });
         @export(&c.key_encoder_free, .{ .name = "ghostty_key_encoder_free" });
         @export(&c.key_encoder_setopt, .{ .name = "ghostty_key_encoder_setopt" });
+        @export(&c.key_encoder_setopt_from_terminal, .{ .name = "ghostty_key_encoder_setopt_from_terminal" });
         @export(&c.key_encoder_encode, .{ .name = "ghostty_key_encoder_encode" });
         @export(&c.osc_new, .{ .name = "ghostty_osc_new" });
         @export(&c.osc_free, .{ .name = "ghostty_osc_free" });

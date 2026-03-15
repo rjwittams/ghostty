@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <ghostty/vt/types.h>
 #include <ghostty/vt/allocator.h>
+#include <ghostty/vt/terminal.h>
 #include <ghostty/vt/key/event.h>
 
 /**
@@ -140,6 +141,10 @@ void ghostty_key_encoder_free(GhosttyKeyEncoder encoder);
  * protocol selection (Kitty keyboard protocol flags), and platform-specific
  * behaviors (macOS option-as-alt).
  *
+ * If you are using a terminal instance, you can set the key encoding
+ * options based on the active terminal state (e.g. legacy vs Kitty mode
+ * and associated flags) with ghostty_key_encoder_setopt_from_terminal().
+ *
  * A null pointer value does nothing. It does not reset the value to the
  * default. The setopt call will do nothing.
  *
@@ -150,6 +155,25 @@ void ghostty_key_encoder_free(GhosttyKeyEncoder encoder);
  * @ingroup key
  */
 void ghostty_key_encoder_setopt(GhosttyKeyEncoder encoder, GhosttyKeyEncoderOption option, const void *value);
+
+/**
+ * Set encoder options from a terminal's current state.
+ *
+ * Reads the terminal's current modes and flags and applies them to the
+ * encoder's options. This sets cursor key application mode, keypad mode,
+ * alt escape prefix, modifyOtherKeys state, and Kitty keyboard protocol
+ * flags from the terminal state.
+ *
+ * Note that the `macos_option_as_alt` option cannot be determined from
+ * terminal state and is reset to `GHOSTTY_OPTION_AS_ALT_FALSE` by this
+ * call. Use ghostty_key_encoder_setopt() to set it afterward if needed.
+ *
+ * @param encoder The encoder handle, must not be NULL
+ * @param terminal The terminal handle, must not be NULL
+ *
+ * @ingroup key
+ */
+void ghostty_key_encoder_setopt_from_terminal(GhosttyKeyEncoder encoder, GhosttyTerminal terminal);
 
 /**
  * Encode a key event into a terminal escape sequence.

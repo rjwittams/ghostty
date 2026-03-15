@@ -55,6 +55,7 @@ pub const key_event_get_unshifted_codepoint = key_event.get_unshifted_codepoint;
 pub const key_encoder_new = key_encode.new;
 pub const key_encoder_free = key_encode.free;
 pub const key_encoder_setopt = key_encode.setopt;
+pub const key_encoder_setopt_from_terminal = key_encode.setopt_from_terminal;
 pub const key_encoder_encode = key_encode.encode;
 
 pub const paste_is_safe = paste.is_safe;
