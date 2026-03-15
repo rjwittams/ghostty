@@ -2,12 +2,37 @@ const std = @import("std");
 const build_options = @import("terminal_options");
 const lib = @import("../lib/main.zig");
 
+/// The event types that can be reported for mouse-related activities.
+/// These are all mutually exclusive (hence in a single enum).
+pub const Event = enum(u3) {
+    none = 0,
+    x10 = 1, // 9
+    normal = 2, // 1000
+    button = 3, // 1002
+    any = 4, // 1003
+
+    /// Returns true if this event sends motion events.
+    pub fn motion(self: Event) bool {
+        return self == .button or self == .any;
+    }
+};
+
+/// The format of mouse events when enabled.
+/// These are all mutually exclusive (hence in a single enum).
+pub const Format = enum(u3) {
+    x10 = 0,
+    utf8 = 1, // 1005
+    sgr = 2, // 1006
+    urxvt = 3, // 1015
+    sgr_pixels = 4, // 1016
+};
+
 /// The possible cursor shapes. Not all app runtimes support these shapes.
 /// The shapes are always based on the W3C supported cursor styles so we
 /// can have a cross platform list.
 //
 // Must be kept in sync with ghostty_cursor_shape_e
-pub const MouseShape = enum(c_int) {
+pub const Shape = enum(c_int) {
     default,
     context_menu,
     help,
@@ -44,7 +69,7 @@ pub const MouseShape = enum(c_int) {
     zoom_out,
 
     /// Build cursor shape from string or null if its unknown.
-    pub fn fromString(v: []const u8) ?MouseShape {
+    pub fn fromString(v: []const u8) ?Shape {
         return string_map.get(v);
     }
 
@@ -57,7 +82,7 @@ pub const MouseShape = enum(c_int) {
 
         break :gtk switch (@import("../build_config.zig").app_runtime) {
             .gtk => @import("gobject").ext.defineEnum(
-                MouseShape,
+                Shape,
                 .{ .name = "GhosttyMouseShape" },
             ),
 
@@ -66,11 +91,11 @@ pub const MouseShape = enum(c_int) {
     };
 
     test "ghostty.h MouseShape" {
-        try lib.checkGhosttyHEnum(MouseShape, "GHOSTTY_MOUSE_SHAPE_");
+        try lib.checkGhosttyHEnum(Shape, "GHOSTTY_MOUSE_SHAPE_");
     }
 };
 
-const string_map = std.StaticStringMap(MouseShape).initComptime(.{
+const string_map = std.StaticStringMap(Shape).initComptime(.{
     // W3C
     .{ "default", .default },
     .{ "context-menu", .context_menu },
@@ -134,7 +159,7 @@ const string_map = std.StaticStringMap(MouseShape).initComptime(.{
 
 test "cursor shape from string" {
     const testing = std.testing;
-    try testing.expectEqual(MouseShape.default, MouseShape.fromString("default").?);
+    try testing.expectEqual(Shape.default, Shape.fromString("default").?);
 }
 
 test {

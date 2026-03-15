@@ -16,7 +16,7 @@ const modes = @import("modes.zig");
 const osc = @import("osc.zig");
 const sgr = @import("sgr.zig");
 const UTF8Decoder = @import("UTF8Decoder.zig");
-const MouseShape = @import("mouse_shape.zig").MouseShape;
+const MouseShape = @import("mouse.zig").Shape;
 
 const log = std.log.scoped(.stream);
 

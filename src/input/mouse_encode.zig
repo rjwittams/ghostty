@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
-const Terminal = @import("../terminal/Terminal.zig");
+const terminal = @import("../terminal/main.zig");
+const Terminal = terminal.Terminal;
 const renderer_size = @import("../renderer/size.zig");
 const point = @import("../terminal/point.zig");
 const key = @import("key.zig");
@@ -11,10 +12,10 @@ const log = std.log.scoped(.mouse_encode);
 /// Options that affect mouse encoding behavior and provide runtime context.
 pub const Options = struct {
     /// Terminal mouse reporting mode (X10, normal, button, any).
-    event: Terminal.MouseEvent = .none,
+    event: terminal.MouseEvent = .none,
 
     /// Terminal mouse reporting format.
-    format: Terminal.MouseFormat = .x10,
+    format: terminal.MouseFormat = .x10,
 
     /// Full renderer size used to convert surface-space pixel positions
     /// into grid cell coordinates (for most formats) and terminal-space
