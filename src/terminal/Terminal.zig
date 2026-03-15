@@ -96,7 +96,7 @@ flags: packed struct {
     /// set mode in modes. You can't get the right event/format to use
     /// based on modes alone because modes don't show you what order
     /// this was called so we have to track it separately.
-    mouse_event: MouseEvents = .none,
+    mouse_event: MouseEvent = .none,
     mouse_format: MouseFormat = .x10,
 
     /// Set via the XTSHIFTESCAPE sequence. If true (XTSHIFTESCAPE = 1)
@@ -169,7 +169,7 @@ pub const Dirty = packed struct {
 
 /// The event types that can be reported for mouse-related activities.
 /// These are all mutually exclusive (hence in a single enum).
-pub const MouseEvents = enum(u3) {
+pub const MouseEvent = enum(u3) {
     none = 0,
     x10 = 1, // 9
     normal = 2, // 1000
@@ -177,7 +177,7 @@ pub const MouseEvents = enum(u3) {
     any = 4, // 1003
 
     /// Returns true if this event sends motion events.
-    pub fn motion(self: MouseEvents) bool {
+    pub fn motion(self: MouseEvent) bool {
         return self == .button or self == .any;
     }
 };

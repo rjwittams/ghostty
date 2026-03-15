@@ -16,7 +16,7 @@ const MouseShape = @import("terminal/mouse_shape.zig").MouseShape;
 physical_key: input.Key,
 
 /// The mouse event tracking mode, if any.
-mouse_event: terminal.Terminal.MouseEvents,
+mouse_event: terminal.Terminal.MouseEvent,
 
 /// The current terminal's mouse shape.
 mouse_shape: MouseShape,
