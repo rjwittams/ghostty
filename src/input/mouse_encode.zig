@@ -93,7 +93,7 @@ pub fn encode(
         // If we don't have a motion-tracking event mode, do nothing,
         // because events outside the viewport are never reported in
         // such cases.
-        if (!opts.event.motion()) return;
+        if (!terminal.mouse.eventSendsMotion(opts.event)) return;
 
         // For motion modes, we only report if a button is currently pressed.
         // This lets a TUI detect a click over the surface + drag out

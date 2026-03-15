@@ -1,31 +1,32 @@
 const std = @import("std");
 const build_options = @import("terminal_options");
 const lib = @import("../lib/main.zig");
+const lib_target: lib.Target = if (build_options.c_abi) .c else .zig;
 
 /// The event types that can be reported for mouse-related activities.
 /// These are all mutually exclusive (hence in a single enum).
-pub const Event = enum(u3) {
-    none = 0,
-    x10 = 1, // 9
-    normal = 2, // 1000
-    button = 3, // 1002
-    any = 4, // 1003
+pub const Event = lib.Enum(lib_target, &.{
+    "none",
+    "x10", // 9
+    "normal", // 1000
+    "button", // 1002
+    "any", // 1003
+});
 
-    /// Returns true if this event sends motion events.
-    pub fn motion(self: Event) bool {
-        return self == .button or self == .any;
-    }
-};
+/// Returns true if this event sends motion events.
+pub fn eventSendsMotion(event: Event) bool {
+    return event == .button or event == .any;
+}
 
 /// The format of mouse events when enabled.
 /// These are all mutually exclusive (hence in a single enum).
-pub const Format = enum(u3) {
-    x10 = 0,
-    utf8 = 1, // 1005
-    sgr = 2, // 1006
-    urxvt = 3, // 1015
-    sgr_pixels = 4, // 1016
-};
+pub const Format = lib.Enum(lib_target, &.{
+    "x10",
+    "utf8", // 1005
+    "sgr", // 1006
+    "urxvt", // 1015
+    "sgr_pixels", // 1016
+});
 
 /// The possible cursor shapes. Not all app runtimes support these shapes.
 /// The shapes are always based on the W3C supported cursor styles so we
