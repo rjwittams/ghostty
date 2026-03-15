@@ -325,8 +325,7 @@ _ghostty_deferred_init() {
 
         # Configure environment variables for remote session
         if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-env* ]]; then
-          ssh_opts+=(-o "SetEnv COLORTERM=truecolor")
-          ssh_opts+=(-o "SendEnv TERM_PROGRAM TERM_PROGRAM_VERSION")
+          ssh_opts+=(-o "SendEnv COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION")
         fi
 
         # Install terminfo on remote host if needed
@@ -382,7 +381,7 @@ _ghostty_deferred_init() {
         fi
 
         # Execute SSH with TERM environment variable
-        TERM="$ssh_term" command ssh "${ssh_opts[@]}" "$@"
+        TERM="$ssh_term" COLORTERM=truecolor command ssh "${ssh_opts[@]}" "$@"
       }
     fi
 

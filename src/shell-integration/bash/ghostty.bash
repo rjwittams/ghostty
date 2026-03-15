@@ -123,8 +123,7 @@ if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
 
     # Configure environment variables for remote session
     if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-env* ]]; then
-      ssh_opts+=(-o "SetEnv COLORTERM=truecolor")
-      ssh_opts+=(-o "SendEnv TERM_PROGRAM TERM_PROGRAM_VERSION")
+      ssh_opts+=(-o "SendEnv COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION")
     fi
 
     # Install terminfo on remote host if needed
@@ -180,7 +179,7 @@ if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
     fi
 
     # Execute SSH with TERM environment variable
-    TERM="$ssh_term" builtin command ssh "${ssh_opts[@]}" "$@"
+    TERM="$ssh_term" COLORTERM=truecolor builtin command ssh "${ssh_opts[@]}" "$@"
   }
 fi
 
