@@ -42,7 +42,7 @@ terminal: terminalpkg.Terminal,
 /// The shared render state
 renderer_state: *renderer.State,
 
-/// A handle to wake up the renderer. This hints to the renderer that that
+/// A handle to wake up the renderer. This hints to the renderer that
 /// a repaint should happen.
 renderer_wakeup: xev.Async,
 
@@ -391,8 +391,8 @@ pub fn threadExit(self: *Termio, data: *ThreadData) void {
     self.backend.threadExit(data);
 }
 
-/// Send a message to the the mailbox. Depending on the mailbox type in
-/// use this may process now or it may just enqueue and process later.
+/// Send a message to the mailbox. Depending on the mailbox type in use
+/// this may process now or it may just enqueue and process later.
 ///
 /// This will also notify the mailbox thread to process the message. If
 /// you're sending a lot of messages, it may be more efficient to use
@@ -609,7 +609,7 @@ pub fn clearScreen(self: *Termio, td: *ThreadData, history: bool) !void {
             // Clear all Kitty graphics state for this screen. This copies
             // Kitty's behavior when Cmd+K deletes all Kitty graphics. I
             // didn't spend time researching whether it only deletes Kitty
-            // graphics that are placed baove the cursor or if it deletes
+            // graphics that are placed above the cursor or if it deletes
             // all of them. We delete all of them for now but if this behavior
             // isn't fully correct we should fix this later.
             self.terminal.screens.active.kitty_images.delete(

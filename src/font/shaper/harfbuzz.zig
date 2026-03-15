@@ -104,7 +104,7 @@ pub const Shaper = struct {
     }
 
     /// Returns an iterator that returns one text run at a time for the
-    /// given terminal row. Note that text runs are are only valid one at a time
+    /// given terminal row. Note that text runs are only valid one at a time
     /// for a Shaper struct since they share state.
     ///
     /// The selection must be a row-only selection (height = 1). See

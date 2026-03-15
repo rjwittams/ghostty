@@ -36,7 +36,7 @@ pub const StreamHandler = struct {
     /// The mailbox for notifying the renderer of things.
     renderer_mailbox: *renderer.Thread.Mailbox,
 
-    /// A handle to wake up the renderer. This hints to the renderer that that
+    /// A handle to wake up the renderer. This hints to the renderer that
     /// a repaint should happen.
     renderer_wakeup: xev.Async,
 
@@ -1038,7 +1038,7 @@ pub const StreamHandler = struct {
         self: *StreamHandler,
         shape: terminal.MouseShape,
     ) !void {
-        // Avoid changing the shape it it is already set to avoid excess
+        // Avoid changing the shape if it is already set to avoid excess
         // cross-thread messaging.
         if (self.terminal.mouse_shape == shape) return;
 
