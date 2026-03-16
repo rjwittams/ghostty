@@ -31,6 +31,7 @@
  * - @ref terminal "Terminal" - Complete terminal emulator state and rendering
  * - @ref formatter "Formatter" - Format terminal content as plain text, VT sequences, or HTML
  * - @ref key "Key Encoding" - Encode key events into terminal sequences
+ * - @ref mouse "Mouse Encoding" - Encode mouse events into terminal sequences
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste Utilities" - Validate paste data safety
@@ -88,6 +89,7 @@ extern "C" {
 #include <ghostty/vt/osc.h>
 #include <ghostty/vt/sgr.h>
 #include <ghostty/vt/key.h>
+#include <ghostty/vt/mouse.h>
 #include <ghostty/vt/paste.h>
 #include <ghostty/vt/wasm.h>
 

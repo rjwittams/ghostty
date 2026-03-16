@@ -3,6 +3,8 @@ pub const formatter = @import("formatter.zig");
 pub const osc = @import("osc.zig");
 pub const key_event = @import("key_event.zig");
 pub const key_encode = @import("key_encode.zig");
+pub const mouse_event = @import("mouse_event.zig");
+pub const mouse_encode = @import("mouse_encode.zig");
 pub const paste = @import("paste.zig");
 pub const sgr = @import("sgr.zig");
 pub const terminal = @import("terminal.zig");
@@ -58,6 +60,25 @@ pub const key_encoder_setopt = key_encode.setopt;
 pub const key_encoder_setopt_from_terminal = key_encode.setopt_from_terminal;
 pub const key_encoder_encode = key_encode.encode;
 
+pub const mouse_event_new = mouse_event.new;
+pub const mouse_event_free = mouse_event.free;
+pub const mouse_event_set_action = mouse_event.set_action;
+pub const mouse_event_get_action = mouse_event.get_action;
+pub const mouse_event_set_button = mouse_event.set_button;
+pub const mouse_event_clear_button = mouse_event.clear_button;
+pub const mouse_event_get_button = mouse_event.get_button;
+pub const mouse_event_set_mods = mouse_event.set_mods;
+pub const mouse_event_get_mods = mouse_event.get_mods;
+pub const mouse_event_set_position = mouse_event.set_position;
+pub const mouse_event_get_position = mouse_event.get_position;
+
+pub const mouse_encoder_new = mouse_encode.new;
+pub const mouse_encoder_free = mouse_encode.free;
+pub const mouse_encoder_setopt = mouse_encode.setopt;
+pub const mouse_encoder_setopt_from_terminal = mouse_encode.setopt_from_terminal;
+pub const mouse_encoder_reset = mouse_encode.reset;
+pub const mouse_encoder_encode = mouse_encode.encode;
+
 pub const paste_is_safe = paste.is_safe;
 
 pub const terminal_new = terminal.new;
@@ -73,6 +94,8 @@ test {
     _ = osc;
     _ = key_event;
     _ = key_encode;
+    _ = mouse_event;
+    _ = mouse_encode;
     _ = paste;
     _ = sgr;
     _ = terminal;

@@ -4,7 +4,7 @@ const std = @import("std");
 /// from ButtonState because button state is simply the current state
 /// of a mouse button but an action is something that triggers via
 /// an GUI event and supports more.
-pub const Action = enum { press, release, motion };
+pub const Action = enum(c_int) { press, release, motion };
 
 /// The state of a mouse button.
 ///
