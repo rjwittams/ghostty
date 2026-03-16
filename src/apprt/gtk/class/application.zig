@@ -9,6 +9,7 @@ const gobject = @import("gobject");
 const gtk = @import("gtk");
 
 const build_config = @import("../../../build_config.zig");
+const build_info = @import("../build/info.zig");
 const state = &@import("../../../global.zig").state;
 const i18n = @import("../../../os/main.zig").i18n;
 const apprt = @import("../../../apprt.zig");
@@ -327,7 +328,7 @@ pub const Application = extern struct {
                 }
             }
 
-            break :app_id ApprtApp.application_id;
+            break :app_id build_info.application_id;
         };
 
         const display: *gdk.Display = gdk.Display.getDefault() orelse {
@@ -381,7 +382,7 @@ pub const Application = extern struct {
             // Force the resource path to a known value so it doesn't depend
             // on the app id (which changes between debug/release and can be
             // user-configured) and force it to load in compiled resources.
-            .resource_base_path = "/com/mitchellh/ghostty",
+            .resource_base_path = build_info.resource_path,
         });
 
         // Setup our private state. More setup is done in the init
