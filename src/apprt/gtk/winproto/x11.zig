@@ -106,9 +106,8 @@ pub const App = struct {
         };
     }
 
-    pub fn deinit(self: *App, alloc: Allocator) void {
+    pub fn deinit(self: *App) void {
         _ = self;
-        _ = alloc;
     }
 
     /// Checks for an immediate pending XKB state update event, and returns the

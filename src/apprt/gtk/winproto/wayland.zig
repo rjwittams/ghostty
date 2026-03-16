@@ -7,66 +7,24 @@ const gdk_wayland = @import("gdk_wayland");
 const gobject = @import("gobject");
 const gtk = @import("gtk");
 const layer_shell = @import("gtk4-layer-shell");
+
 const wayland = @import("wayland");
-
-const Config = @import("../../../config.zig").Config;
-const input = @import("../../../input.zig");
-const ApprtWindow = @import("../class/window.zig").Window;
-
 const wl = wayland.client.wl;
 const kde = wayland.client.kde;
 const org = wayland.client.org;
 const xdg = wayland.client.xdg;
+
+const Config = @import("../../../config.zig").Config;
+const Globals = @import("wayland/Globals.zig");
+const input = @import("../../../input.zig");
+const ApprtWindow = @import("../class/window.zig").Window;
 
 const log = std.log.scoped(.winproto_wayland);
 
 /// Wayland state that contains application-wide Wayland objects (e.g. wl_display).
 pub const App = struct {
     display: *wl.Display,
-    context: *Context,
-
-    const Context = struct {
-        alloc: Allocator,
-
-        kde_blur_manager: ?*org.KdeKwinBlurManager = null,
-
-        // FIXME: replace with `zxdg_decoration_v1` once GTK merges
-        // https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/6398
-        kde_decoration_manager: ?*org.KdeKwinServerDecorationManager = null,
-        kde_decoration_manager_global_name: ?u32 = null,
-
-        kde_slide_manager: ?*org.KdeKwinSlideManager = null,
-
-        kde_output_order: ?*kde.OutputOrderV1 = null,
-        kde_output_order_global_name: ?u32 = null,
-
-        /// Connector name of the primary output (e.g., "DP-1") as reported
-        /// by kde_output_order_v1. The first output in each priority list
-        /// is the primary.
-        primary_output_name: ?[:0]const u8 = null,
-
-        /// Tracks the output order event cycle. Set to true after a `done`
-        /// event so the next `output` event is captured as the new primary.
-        /// Initialized to true so the first event after binding is captured.
-        output_order_done: bool = true,
-
-        default_deco_mode: ?org.KdeKwinServerDecorationManager.Mode = null,
-
-        xdg_activation: ?*xdg.ActivationV1 = null,
-
-        /// Whether the xdg_wm_dialog_v1 protocol is present.
-        ///
-        /// If it is present, gtk4-layer-shell < 1.0.4 may crash when the user
-        /// creates a quick terminal, and we need to ensure this fails
-        /// gracefully if this situation occurs.
-        ///
-        /// FIXME: This is a temporary workaround - we should remove this when
-        /// all of our supported distros drop support for affected old
-        /// gtk4-layer-shell versions.
-        ///
-        /// See https://github.com/wmww/gtk4-layer-shell/issues/50
-        xdg_wm_dialog_present: bool = false,
-    };
+    globals: *Globals,
 
     pub fn init(
         alloc: Allocator,
@@ -86,39 +44,17 @@ pub const App = struct {
             gdk_wayland_display.getWlDisplay() orelse return error.NoWaylandDisplay,
         ));
 
-        // Create our context for our callbacks so we have a stable pointer.
-        // Note: at the time of writing this comment, we don't really need
-        // a stable pointer, but it's too scary that we'd need one in the future
-        // and not have it and corrupt memory or something so let's just do it.
-        const context = try alloc.create(Context);
-        errdefer {
-            if (context.primary_output_name) |name| alloc.free(name);
-            alloc.destroy(context);
-        }
-        context.* = .{ .alloc = alloc };
-
-        // Get our display registry so we can get all the available interfaces
-        // and bind to what we need.
-        const registry = try display.getRegistry();
-        registry.setListener(*Context, registryListener, context);
-        if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
-
-        // Do another roundtrip to process events emitted by globals we bound
-        // during registry discovery (e.g. default decoration mode, output
-        // order). Listeners are installed at bind time in registryListener.
-        if (context.kde_decoration_manager != null or context.kde_output_order != null) {
-            if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
-        }
+        const globals: *Globals = try .init(alloc, display);
+        errdefer globals.deinit();
 
         return .{
             .display = display,
-            .context = context,
+            .globals = globals,
         };
     }
 
-    pub fn deinit(self: *App, alloc: Allocator) void {
-        if (self.context.primary_output_name) |name| alloc.free(name);
-        alloc.destroy(self.context);
+    pub fn deinit(self: *App) void {
+        self.globals.deinit();
     }
 
     pub fn eventMods(
@@ -130,19 +66,9 @@ pub const App = struct {
     }
 
     pub fn supportsQuickTerminal(self: App) bool {
+        _ = self;
         if (!layer_shell.isSupported()) {
             log.warn("your compositor does not support the wlr-layer-shell protocol; disabling quick terminal", .{});
-            return false;
-        }
-
-        if (self.context.xdg_wm_dialog_present and
-            layer_shell.getLibraryVersion().order(.{
-                .major = 1,
-                .minor = 0,
-                .patch = 4,
-            }) == .lt)
-        {
-            log.warn("the version of gtk4-layer-shell installed on your system is too old (must be 1.0.4 or newer); disabling quick terminal", .{});
             return false;
         }
 
@@ -154,238 +80,9 @@ pub const App = struct {
         layer_shell.initForWindow(window);
 
         // Set target monitor based on config (null lets compositor decide)
-        const monitor = resolveQuickTerminalMonitor(self.context, apprt_window);
+        const monitor = resolveQuickTerminalMonitor(self.globals, apprt_window);
         defer if (monitor) |v| v.unref();
         layer_shell.setMonitor(window, monitor);
-    }
-
-    /// Resolve the quick-terminal-screen config to a specific monitor.
-    /// Returns null to let the compositor decide (used for .mouse mode).
-    /// Caller owns the returned ref and must unref it.
-    fn resolveQuickTerminalMonitor(
-        context: *Context,
-        apprt_window: *ApprtWindow,
-    ) ?*gdk.Monitor {
-        const config = if (apprt_window.getConfig()) |v| v.get() else return null;
-
-        switch (config.@"quick-terminal-screen") {
-            .mouse => return null,
-            .main, .@"macos-menu-bar" => {},
-        }
-
-        const display = apprt_window.as(gtk.Widget).getDisplay();
-        const monitors = display.getMonitors();
-
-        // Try to find the monitor matching the primary output name.
-        if (context.primary_output_name) |stored_name| {
-            var i: u32 = 0;
-            while (monitors.getObject(i)) |item| : (i += 1) {
-                const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
-                    item.unref();
-                    continue;
-                };
-                if (monitor.getConnector()) |connector_z| {
-                    if (std.mem.orderZ(u8, connector_z, stored_name) == .eq) {
-                        return monitor;
-                    }
-                }
-                monitor.unref();
-            }
-        }
-
-        // Fall back to the first monitor in the list.
-        const first = monitors.getObject(0) orelse return null;
-        return gobject.ext.cast(gdk.Monitor, first) orelse {
-            first.unref();
-            return null;
-        };
-    }
-
-    fn getInterfaceType(comptime field: std.builtin.Type.StructField) ?type {
-        // Globals should be optional pointers
-        const T = switch (@typeInfo(field.type)) {
-            .optional => |o| switch (@typeInfo(o.child)) {
-                .pointer => |v| if (v.size == .one) v.child else return null,
-                else => return null,
-            },
-            else => return null,
-        };
-
-        // Only process Wayland interfaces
-        if (!@hasDecl(T, "interface")) return null;
-        return T;
-    }
-
-    /// Returns the Context field that stores the registry global name for
-    /// protocols that support replacement, or null for simple protocols.
-    fn getGlobalNameField(comptime field_name: []const u8) ?[]const u8 {
-        if (std.mem.eql(u8, field_name, "kde_decoration_manager")) {
-            return "kde_decoration_manager_global_name";
-        }
-        if (std.mem.eql(u8, field_name, "kde_output_order")) {
-            return "kde_output_order_global_name";
-        }
-        return null;
-    }
-
-    /// Reset cached state derived from kde_output_order_v1.
-    fn resetOutputOrderState(context: *Context) void {
-        if (context.primary_output_name) |name| context.alloc.free(name);
-        context.primary_output_name = null;
-        context.output_order_done = true;
-    }
-
-    fn registryListener(
-        registry: *wl.Registry,
-        event: wl.Registry.Event,
-        context: *Context,
-    ) void {
-        const ctx_fields = @typeInfo(Context).@"struct".fields;
-
-        switch (event) {
-            .global => |v| {
-                log.debug("found global {s}", .{v.interface});
-
-                // We don't actually do anything with this other than checking
-                // for its existence, so we process this separately.
-                if (std.mem.orderZ(
-                    u8,
-                    v.interface,
-                    "xdg_wm_dialog_v1",
-                ) == .eq) {
-                    context.xdg_wm_dialog_present = true;
-                    return;
-                }
-
-                inline for (ctx_fields) |field| {
-                    const T = getInterfaceType(field) orelse continue;
-                    if (std.mem.orderZ(u8, v.interface, T.interface.name) == .eq) {
-                        log.debug("matched {}", .{T});
-
-                        const global = registry.bind(
-                            v.name,
-                            T,
-                            T.generated_version,
-                        ) catch |err| {
-                            log.warn(
-                                "error binding interface {s} error={}",
-                                .{ v.interface, err },
-                            );
-                            return;
-                        };
-
-                        // Destroy old binding if this global was re-advertised.
-                        // Bind first so a failed bind preserves the old binding.
-                        if (@field(context, field.name)) |old| {
-                            old.destroy();
-
-                            if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                                resetOutputOrderState(context);
-                            }
-                        }
-
-                        @field(context, field.name) = global;
-                        if (comptime getGlobalNameField(field.name)) |name_field| {
-                            @field(context, name_field) = v.name;
-                        }
-
-                        // Install listeners immediately at bind time. This
-                        // keeps listener setup and object lifetime in one
-                        // place and also supports globals that appear later.
-                        if (comptime std.mem.eql(u8, field.name, "kde_decoration_manager")) {
-                            global.setListener(*Context, decoManagerListener, context);
-                        }
-                        if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                            global.setListener(*Context, outputOrderListener, context);
-                        }
-                        break;
-                    }
-                }
-            },
-
-            // This should be a rare occurrence, but in case a global
-            // is suddenly no longer available, we destroy and unset it
-            // as the protocol mandates.
-            .global_remove => |v| remove: {
-                inline for (ctx_fields) |field| {
-                    if (getInterfaceType(field) == null) continue;
-
-                    const global_name_field = comptime getGlobalNameField(field.name);
-                    if (global_name_field) |name_field| {
-                        if (@field(context, name_field)) |stored_name| {
-                            if (stored_name == v.name) {
-                                if (@field(context, field.name)) |global| global.destroy();
-                                @field(context, field.name) = null;
-                                @field(context, name_field) = null;
-
-                                if (comptime std.mem.eql(u8, field.name, "kde_output_order")) {
-                                    resetOutputOrderState(context);
-                                }
-                                break :remove;
-                            }
-                        }
-                    } else {
-                        if (@field(context, field.name)) |global| {
-                            if (global.getId() == v.name) {
-                                global.destroy();
-                                @field(context, field.name) = null;
-                                break :remove;
-                            }
-                        }
-                    }
-                }
-            },
-        }
-    }
-
-    fn decoManagerListener(
-        _: *org.KdeKwinServerDecorationManager,
-        event: org.KdeKwinServerDecorationManager.Event,
-        context: *Context,
-    ) void {
-        switch (event) {
-            .default_mode => |mode| {
-                context.default_deco_mode = @enumFromInt(mode.mode);
-            },
-        }
-    }
-
-    fn outputOrderListener(
-        _: *kde.OutputOrderV1,
-        event: kde.OutputOrderV1.Event,
-        context: *Context,
-    ) void {
-        switch (event) {
-            .output => |v| {
-                // Only the first output event after a `done` is the new primary.
-                if (!context.output_order_done) return;
-                context.output_order_done = false;
-
-                const name = std.mem.sliceTo(v.output_name, 0);
-                if (context.primary_output_name) |old| context.alloc.free(old);
-
-                if (name.len == 0) {
-                    context.primary_output_name = null;
-                    log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
-                } else {
-                    context.primary_output_name = context.alloc.dupeZ(u8, name) catch |err| {
-                        context.primary_output_name = null;
-                        log.warn("failed to allocate primary output name: {}", .{err});
-                        return;
-                    };
-                    log.debug("primary output: {s}", .{name});
-                }
-            },
-            .done => {
-                if (context.output_order_done) {
-                    // No output arrived since the previous done. Treat this as
-                    // an empty update and drop any stale cached primary.
-                    resetOutputOrderState(context);
-                    return;
-                }
-                context.output_order_done = true;
-            },
-        }
     }
 };
 
@@ -397,7 +94,7 @@ pub const Window = struct {
     surface: *wl.Surface,
 
     /// The context from the app where we can load our Wayland interfaces.
-    app_context: *App.Context,
+    globals: *Globals,
 
     /// A token that, when present, indicates that the window is blurred.
     blur_token: ?*org.KdeKwinBlur = null,
@@ -438,7 +135,7 @@ pub const Window = struct {
         // Get our decoration object so we can control the
         // CSD vs SSD status of this surface.
         const deco: ?*org.KdeKwinServerDecoration = deco: {
-            const mgr = app.context.kde_decoration_manager orelse
+            const mgr = app.globals.get(.kde_decoration_manager) orelse
                 break :deco null;
 
             const deco: *org.KdeKwinServerDecoration = mgr.create(
@@ -464,7 +161,7 @@ pub const Window = struct {
         return .{
             .apprt_window = apprt_window,
             .surface = wl_surface,
-            .app_context = app.context,
+            .globals = app.globals,
             .decoration = deco,
         };
     }
@@ -499,7 +196,7 @@ pub const Window = struct {
             // If we support SSDs, then we should *not* enable CSDs if we prefer SSDs.
             // However, if we do not support SSDs (e.g. GNOME) then we should enable
             // CSDs even if the user prefers SSDs.
-            .Server => if (self.app_context.kde_decoration_manager) |_| false else true,
+            .Server => if (self.globals.get(.kde_decoration_manager)) |_| false else true,
             .None => false,
             else => unreachable,
         };
@@ -511,7 +208,7 @@ pub const Window = struct {
     }
 
     pub fn setUrgent(self: *Window, urgent: bool) !void {
-        const activation = self.app_context.xdg_activation orelse return;
+        const activation = self.globals.get(.xdg_activation) orelse return;
 
         // If there already is a token, destroy and unset it
         if (self.activation_token) |token| token.destroy();
@@ -527,7 +224,7 @@ pub const Window = struct {
 
     /// Update the blur state of the window.
     fn syncBlur(self: *Window) !void {
-        const manager = self.app_context.kde_blur_manager orelse return;
+        const manager = self.globals.get(.kde_blur_manager) orelse return;
         const config = if (self.apprt_window.getConfig()) |v|
             v.get()
         else
@@ -561,7 +258,7 @@ pub const Window = struct {
 
     fn getDecorationMode(self: Window) org.KdeKwinServerDecorationManager.Mode {
         return switch (self.apprt_window.getWindowDecoration()) {
-            .auto => self.app_context.default_deco_mode orelse .Client,
+            .auto => self.globals.state.default_deco_mode orelse .Client,
             .client => .Client,
             .server => .Server,
             .none => .None,
@@ -585,7 +282,7 @@ pub const Window = struct {
 
         // Re-resolve the target monitor on every sync so that config reloads
         // and primary-output changes take effect without recreating the window.
-        const target_monitor = App.resolveQuickTerminalMonitor(self.app_context, self.apprt_window);
+        const target_monitor = resolveQuickTerminalMonitor(self.globals, self.apprt_window);
         defer if (target_monitor) |v| v.unref();
         layer_shell.setMonitor(window, target_monitor);
 
@@ -629,7 +326,7 @@ pub const Window = struct {
         if (self.slide) |slide| slide.release();
 
         self.slide = if (anchored_edge) |anchored| slide: {
-            const mgr = self.app_context.kde_slide_manager orelse break :slide null;
+            const mgr = self.globals.get(.kde_slide_manager) orelse break :slide null;
 
             const slide = mgr.create(self.surface) catch |err| {
                 log.warn("could not create slide object={}", .{err});
@@ -658,8 +355,8 @@ pub const Window = struct {
         const window = apprt_window.as(gtk.Window);
         const config = if (apprt_window.getConfig()) |v| v.get() else return;
 
-        const resolved_monitor = App.resolveQuickTerminalMonitor(
-            apprt_window.winproto().wayland.app_context,
+        const resolved_monitor = resolveQuickTerminalMonitor(
+            apprt_window.winproto().wayland.globals,
             apprt_window,
         );
         defer if (resolved_monitor) |v| v.unref();
@@ -686,7 +383,7 @@ pub const Window = struct {
         event: xdg.ActivationTokenV1.Event,
         self: *Window,
     ) void {
-        const activation = self.app_context.xdg_activation orelse return;
+        const activation = self.globals.get(.xdg_activation) orelse return;
         const current_token = self.activation_token orelse return;
 
         if (token.getId() != current_token.getId()) {
@@ -703,3 +400,45 @@ pub const Window = struct {
         }
     }
 };
+
+/// Resolve the quick-terminal-screen config to a specific monitor.
+/// Returns null to let the compositor decide (used for .mouse mode).
+/// Caller owns the returned ref and must unref it.
+fn resolveQuickTerminalMonitor(
+    globals: *Globals,
+    apprt_window: *ApprtWindow,
+) ?*gdk.Monitor {
+    const config = if (apprt_window.getConfig()) |v| v.get() else return null;
+
+    switch (config.@"quick-terminal-screen") {
+        .mouse => return null,
+        .main, .@"macos-menu-bar" => {},
+    }
+
+    const display = apprt_window.as(gtk.Widget).getDisplay();
+    const monitors = display.getMonitors();
+
+    // Try to find the monitor matching the primary output name.
+    if (globals.state.primary_output_name) |stored_name| {
+        var i: u32 = 0;
+        while (monitors.getObject(i)) |item| : (i += 1) {
+            const monitor = gobject.ext.cast(gdk.Monitor, item) orelse {
+                item.unref();
+                continue;
+            };
+            if (monitor.getConnector()) |connector_z| {
+                if (std.mem.orderZ(u8, connector_z, stored_name) == .eq) {
+                    return monitor;
+                }
+            }
+            monitor.unref();
+        }
+    }
+
+    // Fall back to the first monitor in the list.
+    const first = monitors.getObject(0) orelse return null;
+    return gobject.ext.cast(gdk.Monitor, first) orelse {
+        first.unref();
+        return null;
+    };
+}

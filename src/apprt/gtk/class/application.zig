@@ -350,7 +350,7 @@ pub const Application = extern struct {
             log.warn("error initializing windowing protocol err={}", .{err});
             break :wp .{ .none = .{} };
         };
-        errdefer wp.deinit(alloc);
+        errdefer wp.deinit();
         log.debug("windowing protocol={s}", .{@tagName(wp)});
 
         // Create our GTK Application which encapsulates our process.
@@ -431,7 +431,7 @@ pub const Application = extern struct {
         const alloc = self.allocator();
         const priv: *Private = self.private();
         priv.config.unref();
-        priv.winproto.deinit(alloc);
+        priv.winproto.deinit();
         priv.global_shortcuts.unref();
         if (priv.saved_language) |language| alloc.free(language);
         if (gdk.Display.getDefault()) |display| {
