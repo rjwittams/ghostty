@@ -165,6 +165,7 @@ comptime {
         @export(&c.osc_command_type, .{ .name = "ghostty_osc_command_type" });
         @export(&c.osc_command_data, .{ .name = "ghostty_osc_command_data" });
         @export(&c.focus_encode, .{ .name = "ghostty_focus_encode" });
+        @export(&c.mode_report_encode, .{ .name = "ghostty_mode_report_encode" });
         @export(&c.paste_is_safe, .{ .name = "ghostty_paste_is_safe" });
         @export(&c.color_rgb_get, .{ .name = "ghostty_color_rgb_get" });
         @export(&c.sgr_new, .{ .name = "ghostty_sgr_new" });

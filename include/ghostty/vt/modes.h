@@ -43,11 +43,43 @@
  * }
  * @endcode
  *
+ * ## DECRPM Report Encoding
+ *
+ * Use ghostty_mode_report_encode() to encode a DECRPM response into a
+ * caller-provided buffer:
+ *
+ * @code{.c}
+ * #include <stdio.h>
+ * #include <ghostty/vt.h>
+ *
+ * int main() {
+ *   char buf[32];
+ *   size_t written = 0;
+ *
+ *   // Encode a report that DEC mode 25 (cursor visible) is set
+ *   GhosttyResult result = ghostty_mode_report_encode(
+ *       GHOSTTY_MODE_CURSOR_VISIBLE,
+ *       GHOSTTY_MODE_REPORT_SET,
+ *       buf, sizeof(buf), &written);
+ *
+ *   if (result == GHOSTTY_SUCCESS) {
+ *     printf("Encoded %zu bytes: ", written);
+ *     fwrite(buf, 1, written, stdout);
+ *     printf("\n");  // prints: ESC[?25;1$y
+ *   }
+ *
+ *   return 0;
+ * }
+ * @endcode
+ *
  * @{
  */
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include <ghostty/vt/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -150,6 +182,53 @@ static inline uint16_t ghostty_mode_tag_value(GhosttyModeTag tag) {
 static inline bool ghostty_mode_tag_ansi(GhosttyModeTag tag) {
     return (tag >> 15) != 0;
 }
+
+/**
+ * DECRPM report state values.
+ *
+ * These correspond to the Ps2 parameter in a DECRPM response
+ * sequence (CSI ? Ps1 ; Ps2 $ y).
+ */
+typedef enum {
+    /** Mode is not recognized */
+    GHOSTTY_MODE_REPORT_NOT_RECOGNIZED = 0,
+    /** Mode is set (enabled) */
+    GHOSTTY_MODE_REPORT_SET = 1,
+    /** Mode is reset (disabled) */
+    GHOSTTY_MODE_REPORT_RESET = 2,
+    /** Mode is permanently set */
+    GHOSTTY_MODE_REPORT_PERMANENTLY_SET = 3,
+    /** Mode is permanently reset */
+    GHOSTTY_MODE_REPORT_PERMANENTLY_RESET = 4,
+} GhosttyModeReportState;
+
+/**
+ * Encode a DECRPM (DEC Private Mode Report) response sequence.
+ *
+ * Writes a mode report escape sequence into the provided buffer.
+ * The generated sequence has the form:
+ * - DEC private mode: CSI ? Ps1 ; Ps2 $ y
+ * - ANSI mode:        CSI Ps1 ; Ps2 $ y
+ *
+ * If the buffer is too small, the function returns GHOSTTY_OUT_OF_SPACE
+ * and writes the required buffer size to @p out_written. The caller can
+ * then retry with a sufficiently sized buffer.
+ *
+ * @param tag The mode tag identifying the mode to report on
+ * @param state The report state for this mode
+ * @param buf Output buffer to write the encoded sequence into (may be NULL)
+ * @param buf_len Size of the output buffer in bytes
+ * @param[out] out_written On success, the number of bytes written. On
+ *             GHOSTTY_OUT_OF_SPACE, the required buffer size.
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if the buffer
+ *         is too small
+ */
+GhosttyResult ghostty_mode_report_encode(
+    GhosttyModeTag tag,
+    GhosttyModeReportState state,
+    char* buf,
+    size_t buf_len,
+    size_t* out_written);
 
 #ifdef __cplusplus
 }
