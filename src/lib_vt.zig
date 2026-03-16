@@ -84,6 +84,7 @@ pub const input = struct {
     const paste = @import("input/paste.zig");
     const key = @import("input/key.zig");
     const key_encode = @import("input/key_encode.zig");
+    const mouse_encode = @import("input/mouse_encode.zig");
 
     // Paste-related APIs
     pub const PasteError = paste.Error;
@@ -98,6 +99,13 @@ pub const input = struct {
     pub const KeyMods = key.Mods;
     pub const KeyEncodeOptions = key_encode.Options;
     pub const encodeKey = key_encode.encode;
+
+    // Mouse encoding
+    pub const MouseAction = @import("input/mouse.zig").Action;
+    pub const MouseButton = @import("input/mouse.zig").Button;
+    pub const MouseEncodeOptions = mouse_encode.Options;
+    pub const MouseEncodeEvent = mouse_encode.Event;
+    pub const encodeMouse = mouse_encode.encode;
 };
 
 comptime {
