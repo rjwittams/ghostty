@@ -610,35 +610,24 @@ pub const StreamHandler = struct {
     }
 
     fn requestMode(self: *StreamHandler, mode: terminal.Mode) !void {
-        const tag: terminal.modes.ModeTag = @bitCast(@intFromEnum(mode));
-        const code: u8 = if (self.terminal.modes.get(mode)) 1 else 2;
-
-        var msg: termio.Message = .{ .write_small = .{} };
-        const resp = try std.fmt.bufPrint(
-            &msg.write_small.data,
-            "\x1B[{s}{};{}$y",
-            .{
-                if (tag.ansi) "" else "?",
-                tag.value,
-                code,
-            },
-        );
-        msg.write_small.len = @intCast(resp.len);
-        self.messageWriter(msg);
+        self.sendModeReport(self.terminal.modes.getReport(.fromMode(mode)));
     }
 
     fn requestModeUnknown(self: *StreamHandler, mode_raw: u16, ansi: bool) !void {
-        var msg: termio.Message = .{ .write_small = .{} };
-        const resp = try std.fmt.bufPrint(
-            &msg.write_small.data,
-            "\x1B[{s}{};0$y",
-            .{
-                if (ansi) "" else "?",
-                mode_raw,
-            },
-        );
-        msg.write_small.len = @intCast(resp.len);
-        self.messageWriter(msg);
+        self.sendModeReport(self.terminal.modes.getReport(.{ .value = @truncate(mode_raw), .ansi = ansi }));
+    }
+
+    fn sendModeReport(self: *StreamHandler, report: terminal.modes.Report) void {
+        var data: termio.Message.WriteReq.Small.Array = undefined;
+        var writer: std.Io.Writer = .fixed(&data);
+        report.encode(&writer) catch |err| {
+            log.err("error encoding mode report err={}", .{err});
+            return;
+        };
+        self.messageWriter(.{ .write_small = .{
+            .data = data,
+            .len = @intCast(writer.buffered().len),
+        } });
     }
 
     pub fn setMode(self: *StreamHandler, mode: terminal.Mode, enabled: bool) !void {
