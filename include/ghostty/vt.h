@@ -99,6 +99,7 @@ extern "C" {
 #include <ghostty/vt/osc.h>
 #include <ghostty/vt/sgr.h>
 #include <ghostty/vt/key.h>
+#include <ghostty/vt/modes.h>
 #include <ghostty/vt/mouse.h>
 #include <ghostty/vt/paste.h>
 #include <ghostty/vt/wasm.h>
