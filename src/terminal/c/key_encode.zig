@@ -152,7 +152,7 @@ pub fn encode(
             // Discarding always uses a u64. If we're on 32-bit systems
             // we cast down. We should make this safer in the future.
             out_written.* = @intCast(discarding.count);
-            return .out_of_memory;
+            return .out_of_space;
         },
     };
 
@@ -329,7 +329,7 @@ test "encode: kitty ctrl release with ctrl mod set" {
 
     // Encode null should give us the length required
     var required: usize = 0;
-    try testing.expectEqual(Result.out_of_memory, encode(
+    try testing.expectEqual(Result.out_of_space, encode(
         encoder,
         event,
         null,

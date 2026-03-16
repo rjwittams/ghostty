@@ -30,13 +30,16 @@
  * The API is organized into the following groups:
  * - @ref terminal "Terminal" - Complete terminal emulator state and rendering
  * - @ref formatter "Formatter" - Format terminal content as plain text, VT sequences, or HTML
- * - @ref key "Key Encoding" - Encode key events into terminal sequences
- * - @ref mouse "Mouse Encoding" - Encode mouse events into terminal sequences
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste Utilities" - Validate paste data safety
  * - @ref allocator "Memory Management" - Memory management and custom allocators
  * - @ref wasm "WebAssembly Utilities" - WebAssembly convenience functions
+ *
+ * Encoding related APIs:
+ * - @ref focus "Focus Encoding" - Encode focus in/out events into terminal sequences
+ * - @ref key "Key Encoding" - Encode key events into terminal sequences
+ * - @ref mouse "Mouse Encoding" - Encode mouse events into terminal sequences
  *
  * @section examples_sec Examples
  *
@@ -90,6 +93,7 @@ extern "C" {
 
 #include <ghostty/vt/types.h>
 #include <ghostty/vt/allocator.h>
+#include <ghostty/vt/focus.h>
 #include <ghostty/vt/formatter.h>
 #include <ghostty/vt/terminal.h>
 #include <ghostty/vt/osc.h>

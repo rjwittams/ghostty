@@ -240,7 +240,7 @@ pub fn encode(
             // Discarding always uses a u64. If we're on 32-bit systems
             // we cast down. We should make this safer in the future.
             out_written.* = @intCast(discarding.count);
-            return .out_of_memory;
+            return .out_of_space;
         },
     };
 
@@ -386,7 +386,7 @@ test "encode: sgr press left" {
     mouse_event.set_position(event, .{ .x = 0, .y = 0 });
 
     var required: usize = 0;
-    try testing.expectEqual(Result.out_of_memory, encode(
+    try testing.expectEqual(Result.out_of_space, encode(
         encoder,
         event,
         null,
@@ -507,7 +507,7 @@ test "encode: querying required size doesn't update dedupe state" {
     mouse_event.set_position(event, .{ .x = 5, .y = 6 });
 
     var required: usize = 0;
-    try testing.expectEqual(Result.out_of_memory, encode(
+    try testing.expectEqual(Result.out_of_space, encode(
         encoder,
         event,
         null,

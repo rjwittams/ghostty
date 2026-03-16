@@ -1,4 +1,5 @@
 pub const color = @import("color.zig");
+pub const focus = @import("focus.zig");
 pub const formatter = @import("formatter.zig");
 pub const osc = @import("osc.zig");
 pub const key_event = @import("key_event.zig");
@@ -19,6 +20,8 @@ pub const osc_command_type = osc.commandType;
 pub const osc_command_data = osc.commandData;
 
 pub const color_rgb_get = color.rgb_get;
+
+pub const focus_encode = focus.encode;
 
 pub const formatter_terminal_new = formatter.terminal_new;
 pub const formatter_format_buf = formatter.format_buf;
@@ -90,6 +93,7 @@ pub const terminal_scroll_viewport = terminal.scroll_viewport;
 
 test {
     _ = color;
+    _ = focus;
     _ = formatter;
     _ = osc;
     _ = key_event;

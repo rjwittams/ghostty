@@ -189,7 +189,7 @@ void ghostty_mouse_encoder_reset(GhosttyMouseEncoder encoder);
  * Not all mouse events produce output. In such cases this returns
  * GHOSTTY_SUCCESS with out_len set to 0.
  *
- * If the output buffer is too small, this returns GHOSTTY_OUT_OF_MEMORY
+ * If the output buffer is too small, this returns GHOSTTY_OUT_OF_SPACE
  * and out_len contains the required size.
  *
  * @param encoder The encoder handle, must not be NULL
@@ -197,7 +197,7 @@ void ghostty_mouse_encoder_reset(GhosttyMouseEncoder encoder);
  * @param out_buf Buffer to write encoded bytes to, or NULL to query required size
  * @param out_buf_size Size of out_buf in bytes
  * @param out_len Pointer to store bytes written (or required bytes on failure)
- * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_MEMORY if buffer is too small,
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_SPACE if buffer is too small,
  *         or another error code
  *
  * @ingroup mouse

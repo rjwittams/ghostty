@@ -664,8 +664,13 @@ pub fn focusGained(self: *Termio, td: *ThreadData, focused: bool) !void {
 
     // If we have focus events enabled, we send the focus event.
     if (focus_event) {
-        const seq = if (focused) "\x1b[I" else "\x1b[O";
-        try self.queueWrite(td, seq, false);
+        var buf: [terminalpkg.focus.max_encode_size]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buf);
+        terminalpkg.focus.encode(&writer, if (focused) .gained else .lost) catch |err| {
+            log.err("error encoding focus event err={}", .{err});
+            return;
+        };
+        try self.queueWrite(td, writer.buffered(), false);
     }
 
     // We always notify our backend of focus changes.
