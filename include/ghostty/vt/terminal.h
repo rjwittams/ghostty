@@ -199,36 +199,36 @@ void ghostty_terminal_scroll_viewport(GhosttyTerminal terminal,
 /**
  * Get the current value of a terminal mode.
  *
- * Returns the value of the mode identified by the given mode tag.
+ * Returns the value of the mode identified by the given mode.
  *
  * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
- * @param tag The mode tag identifying the mode to query
+ * @param mode The mode identifying the mode to query
  * @param[out] out_value On success, set to true if the mode is set, false
  *             if it is reset
  * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if the terminal
- *         is NULL or the tag does not correspond to a known mode
+ *         is NULL or the mode does not correspond to a known mode
  *
  * @ingroup terminal
  */
 GhosttyResult ghostty_terminal_mode_get(GhosttyTerminal terminal,
-                                        GhosttyModeTag tag,
+                                        GhosttyMode mode,
                                         bool* out_value);
 
 /**
  * Set the value of a terminal mode.
  *
- * Sets the mode identified by the given mode tag to the specified value.
+ * Sets the mode identified by the given mode to the specified value.
  *
  * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
- * @param tag The mode tag identifying the mode to set
+ * @param mode The mode identifying the mode to set
  * @param value true to set the mode, false to reset it
  * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if the terminal
- *         is NULL or the tag does not correspond to a known mode
+ *         is NULL or the mode does not correspond to a known mode
  *
  * @ingroup terminal
  */
 GhosttyResult ghostty_terminal_mode_set(GhosttyTerminal terminal,
-                                        GhosttyModeTag tag,
+                                        GhosttyMode mode,
                                         bool value);
 
 /** @} */
