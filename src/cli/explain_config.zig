@@ -128,3 +128,15 @@ fn explainKeybind(name: []const u8) ?[]const u8 {
         },
     };
 }
+
+test "explain" {
+    // Config options
+    try std.testing.expect(explainOption("font-size") != null);
+    try std.testing.expect(explainOption("copy_to_clipboard") == null);
+    try std.testing.expect(explainOption("unknown-option") == null);
+
+    // Keybind actions
+    try std.testing.expect(explainKeybind("copy_to_clipboard") != null);
+    try std.testing.expect(explainKeybind("font-size") == null);
+    try std.testing.expect(explainKeybind("unknown_keybind") == null);
+}
