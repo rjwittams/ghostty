@@ -69,7 +69,7 @@ pub const Event = struct {
     pos: Pos = .{},
 
     /// Mouse position in surface-space pixels.
-    pub const Pos = struct {
+    pub const Pos = extern struct {
         x: f32 = 0,
         y: f32 = 0,
     };

@@ -172,7 +172,7 @@ pub const Coordinate = union(enum) {
 ///
 /// The units for the width and height are in world space. They have to
 /// be normalized for any renderer implementation.
-pub const CellSize = struct {
+pub const CellSize = extern struct {
     width: u32,
     height: u32,
 };
@@ -180,7 +180,7 @@ pub const CellSize = struct {
 /// The dimensions of the screen that the grid is rendered to. This is the
 /// terminal screen, so it is likely a subset of the window size. The dimensions
 /// should be in pixels.
-pub const ScreenSize = struct {
+pub const ScreenSize = extern struct {
     width: u32,
     height: u32,
 
@@ -224,7 +224,7 @@ pub const ScreenSize = struct {
 };
 
 /// The dimensions of the grid itself, in rows/columns units.
-pub const GridSize = struct {
+pub const GridSize = extern struct {
     pub const Unit = terminal.size.CellCountInt;
 
     columns: Unit = 0,
@@ -257,7 +257,7 @@ pub const GridSize = struct {
 };
 
 /// The padding to add to a screen.
-pub const Padding = struct {
+pub const Padding = extern struct {
     top: u32 = 0,
     bottom: u32 = 0,
     right: u32 = 0,
