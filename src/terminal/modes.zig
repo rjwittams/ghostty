@@ -245,6 +245,9 @@ const ModeEntry = struct {
 /// The full list of available entries. For documentation see how
 /// they're used within Ghostty or google their values. It is not
 /// valuable to redocument them all here.
+///
+/// NOTE: When adding a new mode entry, also add a corresponding
+/// GHOSTTY_MODE_* macro in include/ghostty/vt/modes.h.
 const entries: []const ModeEntry = &.{
     // ANSI
     .{ .name = "disable_keyboard", .value = 2, .ansi = true }, // KAM

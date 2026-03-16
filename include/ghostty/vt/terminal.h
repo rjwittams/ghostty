@@ -7,10 +7,12 @@
 #ifndef GHOSTTY_VT_TERMINAL_H
 #define GHOSTTY_VT_TERMINAL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <ghostty/vt/types.h>
 #include <ghostty/vt/allocator.h>
+#include <ghostty/vt/modes.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -192,7 +194,42 @@ void ghostty_terminal_vt_write(GhosttyTerminal terminal,
  * @ingroup terminal
  */
 void ghostty_terminal_scroll_viewport(GhosttyTerminal terminal,
-                                      GhosttyTerminalScrollViewport behavior);
+                                       GhosttyTerminalScrollViewport behavior);
+
+/**
+ * Get the current value of a terminal mode.
+ *
+ * Returns the value of the mode identified by the given mode tag.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param tag The mode tag identifying the mode to query
+ * @param[out] out_value On success, set to true if the mode is set, false
+ *             if it is reset
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if the terminal
+ *         is NULL or the tag does not correspond to a known mode
+ *
+ * @ingroup terminal
+ */
+GhosttyResult ghostty_terminal_mode_get(GhosttyTerminal terminal,
+                                        GhosttyModeTag tag,
+                                        bool* out_value);
+
+/**
+ * Set the value of a terminal mode.
+ *
+ * Sets the mode identified by the given mode tag to the specified value.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param tag The mode tag identifying the mode to set
+ * @param value true to set the mode, false to reset it
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE if the terminal
+ *         is NULL or the tag does not correspond to a known mode
+ *
+ * @ingroup terminal
+ */
+GhosttyResult ghostty_terminal_mode_set(GhosttyTerminal terminal,
+                                        GhosttyModeTag tag,
+                                        bool value);
 
 /** @} */
 

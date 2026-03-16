@@ -3,6 +3,7 @@ const testing = std.testing;
 const lib_alloc = @import("../../lib/allocator.zig");
 const CAllocator = lib_alloc.Allocator;
 const ZigTerminal = @import("../Terminal.zig");
+const modes = @import("../modes.zig");
 const size = @import("../size.zig");
 const Result = @import("result.zig").Result;
 
@@ -96,6 +97,30 @@ pub fn resize(
 pub fn reset(terminal_: Terminal) callconv(.c) void {
     const t = terminal_ orelse return;
     t.fullReset();
+}
+
+pub fn mode_get(
+    terminal_: Terminal,
+    tag: modes.ModeTag.Backing,
+    out_value: *bool,
+) callconv(.c) Result {
+    const t = terminal_ orelse return .invalid_value;
+    const mode_tag: modes.ModeTag = @bitCast(tag);
+    const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
+    out_value.* = t.modes.get(mode);
+    return .success;
+}
+
+pub fn mode_set(
+    terminal_: Terminal,
+    tag: modes.ModeTag.Backing,
+    value: bool,
+) callconv(.c) Result {
+    const t = terminal_ orelse return .invalid_value;
+    const mode_tag: modes.ModeTag = @bitCast(tag);
+    const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
+    t.modes.set(mode, value);
+    return .success;
 }
 
 pub fn free(terminal_: Terminal) callconv(.c) void {
@@ -270,6 +295,87 @@ test "resize invalid value" {
 
     try testing.expectEqual(Result.invalid_value, resize(t, 0, 24));
     try testing.expectEqual(Result.invalid_value, resize(t, 80, 0));
+}
+
+test "mode_get and mode_set" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 0,
+        },
+    ));
+    defer free(t);
+
+    var value: bool = undefined;
+
+    // DEC mode 25 (cursor_visible) defaults to true
+    const cursor_visible: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 25, .ansi = false });
+    try testing.expectEqual(Result.success, mode_get(t, cursor_visible, &value));
+    try testing.expect(value);
+
+    // Set it to false
+    try testing.expectEqual(Result.success, mode_set(t, cursor_visible, false));
+    try testing.expectEqual(Result.success, mode_get(t, cursor_visible, &value));
+    try testing.expect(!value);
+
+    // ANSI mode 4 (insert) defaults to false
+    const insert: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 4, .ansi = true });
+    try testing.expectEqual(Result.success, mode_get(t, insert, &value));
+    try testing.expect(!value);
+
+    try testing.expectEqual(Result.success, mode_set(t, insert, true));
+    try testing.expectEqual(Result.success, mode_get(t, insert, &value));
+    try testing.expect(value);
+}
+
+test "mode_get null" {
+    var value: bool = undefined;
+    const tag: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 25, .ansi = false });
+    try testing.expectEqual(Result.invalid_value, mode_get(null, tag, &value));
+}
+
+test "mode_set null" {
+    const tag: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 25, .ansi = false });
+    try testing.expectEqual(Result.invalid_value, mode_set(null, tag, true));
+}
+
+test "mode_get unknown mode" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 0,
+        },
+    ));
+    defer free(t);
+
+    var value: bool = undefined;
+    const unknown: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 9999, .ansi = false });
+    try testing.expectEqual(Result.invalid_value, mode_get(t, unknown, &value));
+}
+
+test "mode_set unknown mode" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 80,
+            .rows = 24,
+            .max_scrollback = 0,
+        },
+    ));
+    defer free(t);
+
+    const unknown: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 9999, .ansi = false });
+    try testing.expectEqual(Result.invalid_value, mode_set(t, unknown, true));
 }
 
 test "vt_write" {
