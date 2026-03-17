@@ -167,23 +167,30 @@ jobs:
       - name: Build Benchmarks
         run: nix develop -c zig build -Demit-bench
 
+  list-examples:
+    if: github.repository == 'ghostty-org/ghostty' && needs.skip.outputs.skip != 'true'
+    needs: skip
+    runs-on: namespace-profile-ghostty-xsm
+    outputs:
+      dirs: ${{ steps.list.outputs.dirs }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: list
+        name: List example directories
+        run: |
+          dirs=$(ls -d example/*/ | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          echo "$dirs" | jq .
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+
   build-examples:
     strategy:
       fail-fast: false
       matrix:
-        dir:
-          [
-            c-vt,
-            c-vt-key-encode,
-            c-vt-paste,
-            c-vt-sgr,
-            zig-formatter,
-            zig-vt,
-            zig-vt-stream,
-          ]
+        dir: ${{ fromJSON(needs.list-examples.outputs.dirs) }}
     name: Example ${{ matrix.dir }}
-    runs-on: namespace-profile-ghostty-sm
-    needs: test
+    runs-on: namespace-profile-ghostty-xsm
+    needs: [test, list-examples]
     env:
       ZIG_LOCAL_CACHE_DIR: /zig/local-cache
       ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
