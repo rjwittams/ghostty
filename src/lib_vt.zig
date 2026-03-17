@@ -53,6 +53,7 @@ pub const RenderState = terminal.RenderState;
 pub const Screen = terminal.Screen;
 pub const ScreenSet = terminal.ScreenSet;
 pub const Selection = terminal.Selection;
+pub const size_report = terminal.size_report;
 pub const SizeReportStyle = terminal.SizeReportStyle;
 pub const StringMap = terminal.StringMap;
 pub const Style = terminal.Style;
@@ -167,6 +168,7 @@ comptime {
         @export(&c.focus_encode, .{ .name = "ghostty_focus_encode" });
         @export(&c.mode_report_encode, .{ .name = "ghostty_mode_report_encode" });
         @export(&c.paste_is_safe, .{ .name = "ghostty_paste_is_safe" });
+        @export(&c.size_report_encode, .{ .name = "ghostty_size_report_encode" });
         @export(&c.color_rgb_get, .{ .name = "ghostty_color_rgb_get" });
         @export(&c.sgr_new, .{ .name = "ghostty_sgr_new" });
         @export(&c.sgr_free, .{ .name = "ghostty_sgr_free" });

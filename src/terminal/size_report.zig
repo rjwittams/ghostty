@@ -1,23 +1,23 @@
 const std = @import("std");
+const build_options = @import("terminal_options");
+const lib = @import("../lib/main.zig");
+const lib_target: lib.Target = if (build_options.c_abi) .c else .zig;
 const CellCountInt = @import("size.zig").CellCountInt;
 
 /// Output formats for terminal size reports written to the PTY.
-pub const Style = enum {
-    /// In-band size reports (mode 2048)
-    mode_2048,
-
-    /// XTWINOPS: report text area size in pixels
-    csi_14_t,
-
-    /// XTWINOPS: report cell size in pixels
-    csi_16_t,
-
-    /// XTWINOPS: report text area size in characters
-    csi_18_t,
-};
+pub const Style = lib.Enum(lib_target, &.{
+    // In-band size reports (mode 2048)
+    "mode_2048",
+    // XTWINOPS: report text area size in pixels
+    "csi_14_t",
+    // XTWINOPS: report cell size in pixels
+    "csi_16_t",
+    // XTWINOPS: report text area size in characters
+    "csi_18_t",
+});
 
 /// Runtime size values used to encode terminal size reports.
-pub const Size = struct {
+pub const Size = lib.Struct(lib_target, struct {
     /// Terminal row count in cells.
     rows: CellCountInt,
 
@@ -29,15 +29,15 @@ pub const Size = struct {
 
     /// Height of a single terminal cell in pixels.
     cell_height: u32,
+});
 
-    pub fn widthPixels(self: Size) u64 {
-        return @as(u64, self.columns) * @as(u64, self.cell_width);
-    }
+fn widthPixels(s: Size) u64 {
+    return @as(u64, s.columns) * @as(u64, s.cell_width);
+}
 
-    pub fn heightPixels(self: Size) u64 {
-        return @as(u64, self.rows) * @as(u64, self.cell_height);
-    }
-};
+fn heightPixels(s: Size) u64 {
+    return @as(u64, s.rows) * @as(u64, s.cell_height);
+}
 
 /// Encode a terminal size report sequence.
 pub fn encode(
@@ -51,16 +51,16 @@ pub fn encode(
             .{
                 size.rows,
                 size.columns,
-                size.heightPixels(),
-                size.widthPixels(),
+                heightPixels(size),
+                widthPixels(size),
             },
         ),
 
         .csi_14_t => try writer.print(
             "\x1b[4;{};{}t",
             .{
-                size.heightPixels(),
-                size.widthPixels(),
+                heightPixels(size),
+                widthPixels(size),
             },
         ),
 

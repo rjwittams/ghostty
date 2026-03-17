@@ -102,6 +102,7 @@ extern "C" {
 #include <ghostty/vt/modes.h>
 #include <ghostty/vt/mouse.h>
 #include <ghostty/vt/paste.h>
+#include <ghostty/vt/size_report.h>
 #include <ghostty/vt/wasm.h>
 
 #ifdef __cplusplus

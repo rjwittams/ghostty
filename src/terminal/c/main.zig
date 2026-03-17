@@ -9,6 +9,7 @@ pub const mouse_event = @import("mouse_event.zig");
 pub const mouse_encode = @import("mouse_encode.zig");
 pub const paste = @import("paste.zig");
 pub const sgr = @import("sgr.zig");
+pub const size_report = @import("size_report.zig");
 pub const terminal = @import("terminal.zig");
 
 // The full C API, unexported.
@@ -87,6 +88,8 @@ pub const mouse_encoder_encode = mouse_encode.encode;
 
 pub const paste_is_safe = paste.is_safe;
 
+pub const size_report_encode = size_report.encode;
+
 pub const terminal_new = terminal.new;
 pub const terminal_free = terminal.free;
 pub const terminal_reset = terminal.reset;
@@ -108,6 +111,7 @@ test {
     _ = mouse_encode;
     _ = paste;
     _ = sgr;
+    _ = size_report;
     _ = terminal;
 
     // We want to make sure we run the tests for the C allocator interface.
