@@ -48,11 +48,6 @@ pub const Parser = struct {
         block,
     };
 
-    const BlockTerminator = enum {
-        end,
-        err,
-    };
-
     pub fn deinit(self: *Parser) void {
         // If we're in a broken state, we already deinited
         // the buffer, so we don't need to do anything.
@@ -122,16 +117,22 @@ pub const Parser = struct {
                 const line = written[idx..];
 
                 if (parseBlockTerminator(line)) |terminator| {
-                    const err = terminator == .err;
-                    const output = std.mem.trimRight(u8, written[0..idx], "\r\n");
-
-                    // If it is an error then log it.
-                    if (err) log.warn("tmux control mode error={s}", .{output});
+                    const output = std.mem.trimRight(
+                        u8,
+                        written[0..idx],
+                        "\r\n",
+                    );
 
                     // Important: do not clear buffer since the notification
                     // contains it.
                     self.state = .idle;
-                    return if (err) .{ .block_err = output } else .{ .block_end = output };
+                    switch (terminator) {
+                        .end => return .{ .block_end = output },
+                        .err => {
+                            log.warn("tmux control mode error={s}", .{output});
+                            return .{ .block_err = output };
+                        },
+                    }
                 }
 
                 // Didn't end the block, continue accumulating.
@@ -146,6 +147,8 @@ pub const Parser = struct {
     }
 
     const ParseError = error{RegexError};
+
+    const BlockTerminator = enum { end, err };
 
     /// Block payload is raw data, so a line only terminates a block if it
     /// exactly matches tmux's `%end`/`%error` guard-line shape.
@@ -169,6 +172,9 @@ pub const Parser = struct {
         const flags = fields.next() orelse return null;
         const extra = fields.next();
 
+        // In the future, we should compare these to the %begin block
+        // because the tmux source guarantees that these always match and
+        // that is a more robust way to match.
         _ = std.fmt.parseInt(usize, time, 10) catch return null;
         _ = std.fmt.parseInt(usize, command_id, 10) catch return null;
         _ = std.fmt.parseInt(usize, flags, 10) catch return null;
