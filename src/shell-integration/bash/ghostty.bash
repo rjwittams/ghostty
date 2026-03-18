@@ -232,8 +232,16 @@ function __ghostty_precmd() {
     builtin printf "\e]133;D;%s;aid=%s\a" "$ret" "$BASHPID"
   fi
 
-  # Fresh line and start of prompt.
-  builtin printf "\e]133;A;redraw=last;cl=line;aid=%s\a" "$BASHPID"
+  # Fresh line and start of prompt. When ble.sh is active, emit 133;P instead
+  # of 133;A because ble.sh maintains its own cursor position tracking. 133;A's
+  # cursor movement (CR+LF when not at column 0) is invisible to ble.sh and
+  # desyncs its position state, causing display artifacts like duplicate
+  # prompts. See: https://github.com/akinomyoga/ble.sh/issues/684
+  if [[ -n "${BLE_VERSION-}" ]]; then
+    builtin printf "\e]133;P;k=i\a"
+  else
+    builtin printf "\e]133;A;redraw=last;cl=line;aid=%s\a" "$BASHPID"
+  fi
 
   # unfortunately bash provides no hooks to detect cwd changes
   # in particular this means cwd reporting will not happen for a
