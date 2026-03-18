@@ -24,12 +24,12 @@
  *    - Free the event with ghostty_mouse_event_free() or reuse it.
  * 4. Free the encoder with ghostty_mouse_encoder_free() when done.
  *
- * For a complete working example, see example/c-vt-mouse-encode in the
+ * For a complete working example, see example/c-vt-encode-mouse in the
  * repository.
  *
  * ## Example
  *
- * @snippet c-vt-mouse-encode/src/main.c mouse-encode
+ * @snippet c-vt-encode-mouse/src/main.c mouse-encode
  *
  * ## Example: Encoding with Terminal State
  *

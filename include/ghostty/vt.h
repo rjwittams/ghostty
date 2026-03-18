@@ -45,8 +45,8 @@
  *
  * Complete working examples:
  * - @ref c-vt/src/main.c - OSC parser example
- * - @ref c-vt-key-encode/src/main.c - Key encoding example
- * - @ref c-vt-mouse-encode/src/main.c - Mouse encoding example
+ * - @ref c-vt-encode-key/src/main.c - Key encoding example
+ * - @ref c-vt-encode-mouse/src/main.c - Mouse encoding example
  * - @ref c-vt-paste/src/main.c - Paste safety check example
  * - @ref c-vt-sgr/src/main.c - SGR parser example
  * - @ref c-vt-formatter/src/main.c - Terminal formatter example
@@ -58,12 +58,12 @@
  * extract command information, and retrieve command-specific data like window titles.
  */
 
-/** @example c-vt-key-encode/src/main.c
+/** @example c-vt-encode-key/src/main.c
  * This example demonstrates how to use the key encoder to convert key events
  * into terminal escape sequences using the Kitty keyboard protocol.
  */
 
-/** @example c-vt-mouse-encode/src/main.c
+/** @example c-vt-encode-mouse/src/main.c
  * This example demonstrates how to use the mouse encoder to convert mouse events
  * into terminal escape sequences using the SGR mouse format.
  */

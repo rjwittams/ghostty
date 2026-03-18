@@ -27,12 +27,12 @@
  *      changing its properties.
  * 4. Free the encoder with ghostty_key_encoder_free() when done
  *
- * For a complete working example, see example/c-vt-key-encode in the
+ * For a complete working example, see example/c-vt-encode-key in the
  * repository.
  *
  * ## Example
  *
- * @snippet c-vt-key-encode/src/main.c key-encode
+ * @snippet c-vt-encode-key/src/main.c key-encode
  *
  * ## Example: Encoding with Terminal State
  *
