@@ -179,7 +179,7 @@ jobs:
       - id: list
         name: List example directories
         run: |
-          dirs=$(ls -d example/*/ | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          dirs=$(ls example/*/build.zig.zon 2>/dev/null | xargs -n1 dirname | xargs -n1 basename | jq -R -s -c 'split("\n") | map(select(. != ""))')
           echo "$dirs" | jq .
           echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
 
