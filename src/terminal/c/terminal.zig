@@ -3,12 +3,21 @@ const testing = std.testing;
 const lib_alloc = @import("../../lib/allocator.zig");
 const CAllocator = lib_alloc.Allocator;
 const ZigTerminal = @import("../Terminal.zig");
+const ReadonlyStream = @import("../stream_readonly.zig").Stream;
 const modes = @import("../modes.zig");
 const size = @import("../size.zig");
 const Result = @import("result.zig").Result;
 
 /// C: GhosttyTerminal
 pub const Terminal = ?*ZigTerminal;
+
+const VtStreamWrapper = struct {
+    stream: ReadonlyStream,
+    alloc: std.mem.Allocator,
+};
+
+/// C: GhosttyTerminalVtStream
+pub const VtStream = ?*VtStreamWrapper;
 
 /// C: GhosttyTerminalOptions
 pub const Options = extern struct {
@@ -65,7 +74,62 @@ pub fn vt_write(
 ) callconv(.c) void {
     const t = terminal_ orelse return;
     var stream = t.vtStream();
+    defer stream.deinit();
     stream.nextSlice(ptr[0..len]);
+}
+
+pub fn vt_stream_new(
+    alloc_: ?*const CAllocator,
+    result: *VtStream,
+    terminal_: Terminal,
+) callconv(.c) Result {
+    result.* = vt_stream_new_(alloc_, terminal_) catch |err| {
+        result.* = null;
+        return switch (err) {
+            error.InvalidValue => .invalid_value,
+            error.OutOfMemory => .out_of_memory,
+        };
+    };
+
+    return .success;
+}
+
+fn vt_stream_new_(
+    alloc_: ?*const CAllocator,
+    terminal_: Terminal,
+) error{
+    InvalidValue,
+    OutOfMemory,
+}!*VtStreamWrapper {
+    const t = terminal_ orelse return error.InvalidValue;
+
+    const alloc = lib_alloc.default(alloc_);
+    const ptr = alloc.create(VtStreamWrapper) catch
+        return error.OutOfMemory;
+    errdefer alloc.destroy(ptr);
+
+    ptr.* = .{
+        .stream = t.vtStream(),
+        .alloc = alloc,
+    };
+
+    return ptr;
+}
+
+pub fn vt_stream_write(
+    stream_: VtStream,
+    ptr: [*]const u8,
+    len: usize,
+) callconv(.c) void {
+    const stream = stream_ orelse return;
+    stream.stream.nextSlice(ptr[0..len]);
+}
+
+pub fn vt_stream_free(stream_: VtStream) callconv(.c) void {
+    const stream = stream_ orelse return;
+    const alloc = stream.alloc;
+    stream.stream.deinit();
+    alloc.destroy(stream);
 }
 
 /// C: GhosttyTerminalScrollViewport
@@ -175,6 +239,36 @@ test "new invalid value" {
 
 test "free null" {
     free(null);
+}
+
+test "vt_stream preserves parser state across split writes" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib_alloc.test_allocator,
+        &t,
+        .{
+            .cols = 10,
+            .rows = 4,
+            .max_scrollback = 10_000,
+        },
+    ));
+    defer free(t);
+
+    var stream: VtStream = null;
+    try testing.expectEqual(Result.success, vt_stream_new(
+        &lib_alloc.test_allocator,
+        &stream,
+        t,
+    ));
+    defer vt_stream_free(stream);
+
+    vt_stream_write(stream, "Hello", 5);
+    vt_stream_write(stream, "\x1B[2", 4);
+    vt_stream_write(stream, ";3H!", 4);
+
+    const str = try t.?.plainString(testing.allocator);
+    defer testing.allocator.free(str);
+    try testing.expectEqualStrings("Hello\n  !", str);
 }
 
 test "scroll_viewport" {
