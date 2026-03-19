@@ -39,6 +39,16 @@ extern "C" {
 typedef struct GhosttyTerminal* GhosttyTerminal;
 
 /**
+ * Opaque handle to a terminal VT stream instance.
+ *
+ * A VT stream stores parser state for incremental processing of VT-encoded
+ * data against a terminal. The terminal must outlive the stream.
+ *
+ * @ingroup terminal
+ */
+typedef struct GhosttyTerminalVtStream* GhosttyTerminalVtStream;
+
+/**
  * Terminal initialization options.
  *
  * @ingroup terminal
@@ -179,6 +189,53 @@ GhosttyResult ghostty_terminal_resize(GhosttyTerminal terminal,
 void ghostty_terminal_vt_write(GhosttyTerminal terminal,
                                 const uint8_t* data,
                                 size_t len);
+
+/**
+ * Create a reusable VT stream for incremental terminal updates.
+ *
+ * Unlike `ghostty_terminal_vt_write`, a VT stream preserves parser state
+ * across multiple writes. This is useful when escape sequences may be split
+ * across chunks. The terminal must outlive the stream.
+ *
+ * @param allocator Pointer to allocator, or NULL to use the default allocator
+ * @param stream Pointer to store the created VT stream handle
+ * @param terminal The terminal to update (must not be NULL)
+ * @return GHOSTTY_SUCCESS on success, or an error code on failure
+ *
+ * @ingroup terminal
+ */
+GhosttyResult ghostty_terminal_vt_stream_new(const GhosttyAllocator* allocator,
+                                             GhosttyTerminalVtStream* stream,
+                                             GhosttyTerminal terminal);
+
+/**
+ * Free a VT stream instance.
+ *
+ * Releases all resources associated with the stream. After this call,
+ * the stream handle becomes invalid.
+ *
+ * @param stream The VT stream handle to free (may be NULL)
+ *
+ * @ingroup terminal
+ */
+void ghostty_terminal_vt_stream_free(GhosttyTerminalVtStream stream);
+
+/**
+ * Write VT-encoded data to a reusable VT stream.
+ *
+ * Feeds raw bytes through the stream parser, updating the associated
+ * terminal state. Parser state is preserved across calls. Only read-only
+ * sequences are processed; sequences that require output (queries) are ignored.
+ *
+ * @param stream The VT stream handle
+ * @param data Pointer to the data to write
+ * @param len Length of the data in bytes
+ *
+ * @ingroup terminal
+ */
+void ghostty_terminal_vt_stream_write(GhosttyTerminalVtStream stream,
+                                      const uint8_t* data,
+                                      size_t len);
 
 /**
  * Scroll the terminal viewport.
