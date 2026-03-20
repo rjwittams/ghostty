@@ -118,6 +118,15 @@ pub fn build(b: *std.Build) !void {
     libghostty_vt_shared.install(libvt_step);
     libghostty_vt_shared.install(b.getInstallStep());
 
+    if (!config.target.result.cpu.arch.isWasm()) {
+        const libghostty_vt_static = try buildpkg.GhosttyLibVt.initStatic(
+            b,
+            &mod,
+        );
+        libghostty_vt_static.install(libvt_step);
+        libghostty_vt_static.install(b.getInstallStep());
+    }
+
     // Helpgen
     if (config.emit_helpgen) deps.help_strings.install();
 

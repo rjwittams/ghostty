@@ -45,6 +45,32 @@ pub fn initWasm(
     };
 }
 
+
+
+pub fn initStatic(
+    b: *std.Build,
+    zig: *const GhosttyZig,
+) !GhosttyLibVt {
+    const lib = b.addLibrary(.{
+        .name = "ghostty-vt",
+        .linkage = .static,
+        .root_module = zig.vt_c,
+        .version = std.SemanticVersion{ .major = 0, .minor = 1, .patch = 0 },
+    });
+    lib.installHeadersDirectory(
+        b.path("include/ghostty"),
+        "ghostty",
+        .{ .include_extensions = &.{".h"} },
+    );
+
+    return .{
+        .step = &lib.step,
+        .artifact = b.addInstallArtifact(lib, .{}),
+        .output = lib.getEmittedBin(),
+        .dsym = null,
+        .pkg_config = null,
+    };
+}
 pub fn initShared(
     b: *std.Build,
     zig: *const GhosttyZig,
