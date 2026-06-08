@@ -240,6 +240,17 @@ pub const LoadingImage = struct {
             expected_size,
         ) else expected_size;
 
+        // A transmission offset past the end of the data is invalid. Without
+        // this check the slice below panics (start > end) on a bad offset,
+        // which would abort the whole process on a safety-checked build.
+        if (start > end) {
+            log.warn(
+                "shared memory offset out of range offset={} data_end={}",
+                .{ start, end },
+            );
+            return error.InvalidData;
+        }
+
         assert(self.data.items.len == 0);
         try self.data.appendSlice(alloc, map[start..end]);
     }
