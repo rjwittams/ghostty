@@ -43,7 +43,14 @@ pub fn execute(
     // this can change.
     var quiet = cmd.quiet;
 
-    const resp_: ?Response = switch (cmd.control) {
+    // The image id (i) and image number (I) are mutually exclusive. Kitty
+    // enforces this for every action before dispatching; we enforce it here
+    // for the actions whose parsed form carries both fields (query, display,
+    // transmit, transmit_and_display). The delete action routes on the `d`
+    // key and only ever retains one of the two, so it cannot represent both.
+    const resp_: ?Response = if (mutuallyExclusiveIds(cmd)) |resp|
+        resp
+    else switch (cmd.control) {
         .query => query(alloc, terminal, cmd),
         .display => display(alloc, terminal, cmd),
         .delete => delete(alloc, terminal, cmd),
@@ -89,6 +96,27 @@ pub fn execute(
 
     return null;
 }
+
+/// Returns an error response if the command specifies both an image id (i)
+/// and an image number (I), which are mutually exclusive. Returns null if
+/// only one (or neither) is set, or if the action doesn't carry both fields.
+fn mutuallyExclusiveIds(cmd: *const Command) ?Response {
+    const ids: struct { id: u32, number: u32 } = if (cmd.transmission()) |t|
+        .{ .id = t.image_id, .number = t.image_number }
+    else if (cmd.display()) |d|
+        .{ .id = d.image_id, .number = d.image_number }
+    else
+        return null;
+
+    if (ids.id > 0 and ids.number > 0) return .{
+        .id = ids.id,
+        .image_number = ids.number,
+        .message = "EINVAL: image ID and number are mutually exclusive",
+    };
+
+    return null;
+}
+
 /// Execute a "query" command.
 ///
 /// This command is used to attempt to load an image and respond with
@@ -141,9 +169,6 @@ fn transmit(
         .image_number = t.image_number,
         .placement_id = t.placement_id,
     };
-    if (t.image_id > 0 and t.image_number > 0) {
-        return .{ .message = "EINVAL: image ID and number are mutually exclusive" };
-    }
 
     const load = loadAndAddImage(alloc, terminal, cmd) catch |err| {
         encodeError(&result, err);
@@ -655,4 +680,46 @@ test "kittygfx delete then retransmit same id gets fresh generation" {
     const gen2 = storage.imageById(1).?.generation;
     try testing.expect(gen2 > gen1);
     try testing.expect(gen2 > gen_delete);
+}
+
+test "kittygfx image id and number are mutually exclusive" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const expected = "EINVAL: image ID and number are mutually exclusive";
+
+    var t = try Terminal.init(alloc, .{ .rows = 5, .cols = 5 });
+    defer t.deinit(alloc);
+
+    // query (a=q) with both i and I set: must reply with an error that echoes
+    // the id, not OK.
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=q,i=42,I=1");
+        defer cmd.deinit(alloc);
+        const resp = execute(alloc, &t, &cmd).?;
+        try testing.expect(!resp.ok());
+        try testing.expectEqualStrings(expected, resp.message);
+        try testing.expectEqual(@as(u32, 42), resp.id);
+        try testing.expectEqual(@as(u32, 1), resp.image_number);
+    }
+
+    // display (a=p) with both i and I set
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=p,i=42,I=1");
+        defer cmd.deinit(alloc);
+        const resp = execute(alloc, &t, &cmd).?;
+        try testing.expect(!resp.ok());
+        try testing.expectEqualStrings(expected, resp.message);
+    }
+
+    // transmit (a=t) with both i and I set
+    {
+        const cmd = try command.Parser.parseString(
+            alloc,
+            "a=t,f=24,t=d,s=1,v=2,i=42,I=1;////////",
+        );
+        defer cmd.deinit(alloc);
+        const resp = execute(alloc, &t, &cmd).?;
+        try testing.expect(!resp.ok());
+        try testing.expectEqualStrings(expected, resp.message);
+    }
 }
