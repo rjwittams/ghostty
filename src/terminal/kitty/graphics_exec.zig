@@ -212,6 +212,15 @@ fn display(
     // Make sure our response has the image id in case we looked up by number
     result.id = img.id;
 
+    // The child's own key, when it has an explicit (external) placement id. A
+    // relative placement created with p=0 gets a fresh internal id that cannot
+    // already appear in any ancestry, so self/cycle checks only apply when an
+    // explicit id is given (which can replace an existing placement).
+    const child_key: ?ImageStorage.PlacementKey = if (result.placement_id != 0) .{
+        .image_id = img.id,
+        .placement_id = .{ .tag = .external, .id = result.placement_id },
+    } else null;
+
     // Location where the placement will go.
     const location: ImageStorage.Placement.Location = location: {
         // Virtual placements are not tracked
@@ -222,6 +231,43 @@ fn display(
             }
 
             break :location .{ .virtual = {} };
+        }
+
+        // Relative placement: positioned relative to a parent placement (P/Q/H/V)
+        // rather than the cursor. The parent is resolved and bound now.
+        if (d.parent_id > 0) {
+            const parent_key = storage.resolveParentKey(
+                d.parent_id,
+                d.parent_placement_id,
+            ) orelse {
+                result.message = "ENOPARENT: parent placement not found";
+                return result;
+            };
+
+            // Direct self-reference.
+            if (child_key) |ck| {
+                if (std.meta.eql(ck, parent_key)) {
+                    result.message = "EINVAL: placement cannot refer to itself as its parent";
+                    return result;
+                }
+            }
+
+            // Cycle / depth validation over the parent chain. child_key is passed
+            // so that replacing an existing placement that would close a loop is
+            // detected.
+            if (storage.relativeAncestryError(parent_key, child_key)) |err| {
+                result.message = switch (err) {
+                    .cycle => "ECYCLE: relative placement would create a cycle",
+                    .too_deep => "ETOODEEP: too many levels of parent references",
+                };
+                return result;
+            }
+
+            break :location .{ .relative = .{
+                .parent = parent_key,
+                .offset_x = d.horizontal_offset,
+                .offset_y = d.vertical_offset,
+            } };
         }
 
         // Track a new pin for our cursor. The cursor is always tracked but we
@@ -260,9 +306,10 @@ fn display(
         return result;
     };
 
-    // Apply cursor movement setting. This only applies to pin placements.
+    // Apply cursor movement setting. This only applies to pin placements;
+    // virtual and relative placements never move the cursor.
     switch (p.location) {
-        .virtual => {},
+        .virtual, .relative => {},
         .pin => |pin| switch (d.cursor_movement) {
             .none => {},
             .after => {
@@ -655,4 +702,196 @@ test "kittygfx delete then retransmit same id gets fresh generation" {
     const gen2 = storage.imageById(1).?.generation;
     try testing.expect(gen2 > gen1);
     try testing.expect(gen2 > gen_delete);
+}
+
+test "kittygfx relative placement: created with parent linkage and offsets" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 1, .width = 2, .height = 2 });
+    try storage.addImage(alloc, .{ .id = 2, .width = 2, .height = 2 });
+
+    // Parent placement (pinned at the cursor).
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=p,i=1,p=1,c=2,r=2");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+
+    // Relative child placement.
+    {
+        const cmd = try command.Parser.parseString(
+            alloc,
+            "a=p,i=2,p=2,P=1,Q=1,H=10,V=5,c=2,r=2",
+        );
+        defer cmd.deinit(alloc);
+        const resp = execute(alloc, &t, &cmd).?;
+        try testing.expect(resp.ok());
+    }
+
+    const child = storage.placements.get(.{
+        .image_id = 2,
+        .placement_id = .{ .tag = .external, .id = 2 },
+    }).?;
+    try testing.expect(child.location == .relative);
+    try testing.expectEqual(@as(u32, 1), child.location.relative.parent.image_id);
+    try testing.expectEqual(@as(i32, 10), child.location.relative.offset_x);
+    try testing.expectEqual(@as(i32, 5), child.location.relative.offset_y);
+}
+
+test "kittygfx relative placement: missing parent is ENOPARENT" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 2, .width = 2, .height = 2 });
+
+    // No parent placement exists for image 1.
+    const cmd = try command.Parser.parseString(
+        alloc,
+        "a=p,i=2,p=2,P=1,Q=1,H=1,V=1,c=2,r=2",
+    );
+    defer cmd.deinit(alloc);
+    const resp = execute(alloc, &t, &cmd).?;
+    try testing.expect(!resp.ok());
+    try testing.expect(std.mem.startsWith(u8, resp.message, "ENOPARENT"));
+}
+
+test "kittygfx relative placement: self-reference is EINVAL" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 1, .width = 2, .height = 2 });
+
+    // Create p=1, then redefine p=1 relative to itself.
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=p,i=1,p=1,c=2,r=2");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+    const cmd = try command.Parser.parseString(
+        alloc,
+        "a=p,i=1,p=1,P=1,Q=1,H=1,V=1,c=2,r=2",
+    );
+    defer cmd.deinit(alloc);
+    const resp = execute(alloc, &t, &cmd).?;
+    try testing.expect(!resp.ok());
+    try testing.expect(std.mem.startsWith(u8, resp.message, "EINVAL"));
+}
+
+test "kittygfx relative placement: cycle is ECYCLE" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 1, .width = 2, .height = 2 });
+    try storage.addImage(alloc, .{ .id = 2, .width = 2, .height = 2 });
+
+    // A = (1,1) pin; B = (2,1) relative to A; then redefine A relative to B.
+    for ([_][]const u8{
+        "a=p,i=1,p=1,c=2,r=2",
+        "a=p,i=2,p=1,P=1,Q=1,H=1,V=1,c=2,r=2",
+    }) |s| {
+        const cmd = try command.Parser.parseString(alloc, s);
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+
+    const cmd = try command.Parser.parseString(
+        alloc,
+        "a=p,i=1,p=1,P=2,Q=1,H=1,V=1,c=2,r=2",
+    );
+    defer cmd.deinit(alloc);
+    const resp = execute(alloc, &t, &cmd).?;
+    try testing.expect(!resp.ok());
+    try testing.expect(std.mem.startsWith(u8, resp.message, "ECYCLE"));
+}
+
+test "kittygfx relative placement: too deep is ETOODEEP" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 1, .width = 2, .height = 2 });
+
+    // Root p=1, then p=2..p=9 each relative to the previous (8 ancestors deep,
+    // which is allowed).
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=p,i=1,p=1,c=1,r=1");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+    var i: u32 = 2;
+    while (i <= 9) : (i += 1) {
+        const s = try std.fmt.allocPrint(
+            alloc,
+            "a=p,i=1,p={d},P=1,Q={d},H=1,V=1,c=1,r=1",
+            .{ i, i - 1 },
+        );
+        defer alloc.free(s);
+        const cmd = try command.Parser.parseString(alloc, s);
+        defer cmd.deinit(alloc);
+        const resp = execute(alloc, &t, &cmd).?;
+        try testing.expect(resp.ok());
+    }
+
+    // p=10 relative to p=9 is one level too deep.
+    const cmd = try command.Parser.parseString(
+        alloc,
+        "a=p,i=1,p=10,P=1,Q=9,H=1,V=1,c=1,r=1",
+    );
+    defer cmd.deinit(alloc);
+    const resp = execute(alloc, &t, &cmd).?;
+    try testing.expect(!resp.ok());
+    try testing.expect(std.mem.startsWith(u8, resp.message, "ETOODEEP"));
+}
+
+test "kittygfx relative placement: does not move the cursor" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 1, .width = 2, .height = 2 });
+    try storage.addImage(alloc, .{ .id = 2, .width = 2, .height = 2 });
+
+    // Parent placement with default cursor movement (moves the cursor).
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=p,i=1,p=1,c=2,r=2");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+    const cx = t.screens.active.cursor.x;
+    const cy = t.screens.active.cursor.y;
+
+    // Relative child with default cursor movement must NOT move the cursor.
+    {
+        const cmd = try command.Parser.parseString(
+            alloc,
+            "a=p,i=2,p=2,P=1,Q=1,H=3,V=3,c=2,r=2",
+        );
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+    try testing.expectEqual(cx, t.screens.active.cursor.x);
+    try testing.expectEqual(cy, t.screens.active.cursor.y);
 }

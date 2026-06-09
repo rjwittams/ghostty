@@ -300,7 +300,9 @@ pub const State = struct {
 
             // Special logic based on location
             switch (p.location) {
-                .pin => {},
+                // Relative placements are real, drawable placements; their
+                // position is resolved through the parent chain in rect().
+                .pin, .relative => {},
                 .virtual => {
                     // We need to mark virtual placements on our renderer so that
                     // we know to rebuild in more scenarios since cell changes can
@@ -409,7 +411,7 @@ pub const State = struct {
     ) PrepImageError!void {
         // Get the rect for the placement. If this placement doesn't have
         // a rect then its virtual or something so skip it.
-        const rect = p.rect(image.*, t) orelse return;
+        const rect = p.rect(image.*, t, &t.screens.active.kitty_images) orelse return;
 
         // This is expensive but necessary.
         const img_top_y = t.screens.active.pages.pointFromPin(.screen, rect.top_left).?.screen.y;

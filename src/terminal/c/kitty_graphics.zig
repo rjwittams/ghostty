@@ -425,6 +425,7 @@ pub fn placement_rect(
     const r = entry.value_ptr.rect(
         image.*,
         wrapper.terminal,
+        &wrapper.terminal.screens.active.kitty_images,
     ) orelse return .no_value;
 
     out.* = .{
@@ -603,18 +604,17 @@ fn computeViewportPos(
     image: *const Image,
     t: *Terminal,
 ) struct { col: i32, row: i32, visible: bool } {
-    // Virtual placements use unicode placeholders and don't have a
-    // screen position — they are rendered inline by the text layout.
-    const pin = switch (p.location) {
-        .pin => |pin| pin,
-        .virtual => return .{ .col = 0, .row = 0, .visible = false },
-    };
+    // Resolve the placement's top-left pin. Virtual placements use unicode
+    // placeholders and have no direct screen position; relative placements
+    // resolve through their parent chain. Either may be unresolvable.
+    const pin = t.screens.active.kitty_images.resolvePin(p, t) orelse
+        return .{ .col = 0, .row = 0, .visible = false };
 
     // Convert both the placement's pin and the viewport's top-left
     // corner to screen-absolute coordinates so we can subtract them
     // to get viewport-relative coordinates.
     const pages = &t.screens.active.pages;
-    const pin_screen = pages.pointFromPin(.screen, pin.*) orelse
+    const pin_screen = pages.pointFromPin(.screen, pin) orelse
         return .{ .col = 0, .row = 0, .visible = false };
     const vp_tl = pages.getTopLeft(.viewport);
     const vp_screen = pages.pointFromPin(.screen, vp_tl) orelse

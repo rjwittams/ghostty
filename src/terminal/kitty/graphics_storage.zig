@@ -278,6 +278,143 @@ pub const ImageStorage = struct {
         self.markMutated();
     }
 
+    /// The maximum depth of a relative-placement parent chain. Matches Kitty's
+    /// PARENT_DEPTH_LIMIT; the spec requires supporting at least 8.
+    pub const parent_depth_limit: usize = 8;
+
+    /// Resolve the absolute top-left pin for a placement.
+    ///
+    /// For pin placements this is simply the tracked pin. For relative
+    /// placements (P/Q/H/V) it walks the parent chain, accumulating each level's
+    /// signed cell offset onto the resolved parent position. Returns null when
+    /// the chain cannot be resolved: a missing parent (e.g. it was deleted), a
+    /// chain deeper than `parent_depth_limit`, or a virtual placement (which has
+    /// no direct pin — virtual parents are resolved separately).
+    pub fn resolvePin(
+        self: *const ImageStorage,
+        p: *const Placement,
+        t: *const terminal.Terminal,
+    ) ?PageList.Pin {
+        return self.resolvePinDepth(p, t, 0);
+    }
+
+    fn resolvePinDepth(
+        self: *const ImageStorage,
+        p: *const Placement,
+        t: *const terminal.Terminal,
+        depth: usize,
+    ) ?PageList.Pin {
+        switch (p.location) {
+            .pin => |pin| return pin.*,
+
+            // Virtual placements have no direct pin; a relative placement whose
+            // parent is virtual is resolved in a later milestone (M3).
+            .virtual => return null,
+
+            .relative => |rel| {
+                if (depth >= parent_depth_limit) return null;
+
+                // Look up and resolve the parent's top-left.
+                const parent = self.placements.get(rel.parent) orelse return null;
+                const base = self.resolvePinDepth(&parent, t, depth + 1) orelse
+                    return null;
+
+                // Apply the vertical cell offset.
+                var pin: PageList.Pin = base;
+                if (rel.offset_y > 0) {
+                    pin = switch (pin.downOverflow(@intCast(rel.offset_y))) {
+                        .offset => |v| v,
+                        .overflow => |v| v.end,
+                    };
+                } else if (rel.offset_y < 0) {
+                    pin = switch (pin.upOverflow(@intCast(-rel.offset_y))) {
+                        .offset => |v| v,
+                        .overflow => |v| v.end,
+                    };
+                }
+
+                // Apply the horizontal cell offset, clamped to the grid.
+                const col: i64 = @as(i64, pin.x) + rel.offset_x;
+                pin.x = @intCast(std.math.clamp(
+                    col,
+                    0,
+                    @as(i64, @intCast(t.cols)) - 1,
+                ));
+                return pin;
+            },
+        }
+    }
+
+    /// Resolve the parent placement referenced by a relative placement's P
+    /// (parent image id) and Q (parent placement id) keys into a concrete
+    /// PlacementKey, or null if no such placement exists.
+    ///
+    /// When Q is 0 the parent is unspecified, so we bind to the parent image's
+    /// "first" placement under a deterministic order (lowest (tag, id)). This is
+    /// resolved at creation time so the binding is stable for the placement's
+    /// lifetime (matching Kitty's create-time binding).
+    pub fn resolveParentKey(
+        self: *const ImageStorage,
+        parent_image_id: u32,
+        parent_placement_id: u32,
+    ) ?PlacementKey {
+        if (parent_placement_id != 0) {
+            const key: PlacementKey = .{
+                .image_id = parent_image_id,
+                .placement_id = .{ .tag = .external, .id = parent_placement_id },
+            };
+            return if (self.placements.contains(key)) key else null;
+        }
+
+        // Q == 0: pick the parent image's first placement deterministically.
+        var best: ?PlacementKey = null;
+        var it = self.placements.iterator();
+        while (it.next()) |entry| {
+            const k = entry.key_ptr.*;
+            if (k.image_id != parent_image_id) continue;
+            if (best == null or placementKeyLess(k, best.?)) best = k;
+        }
+        return best;
+    }
+
+    fn placementKeyLess(a: PlacementKey, b: PlacementKey) bool {
+        const at = @intFromEnum(a.placement_id.tag);
+        const bt = @intFromEnum(b.placement_id.tag);
+        if (at != bt) return at < bt;
+        return a.placement_id.id < b.placement_id.id;
+    }
+
+    pub const RelativeAncestryError = enum { cycle, too_deep };
+
+    /// Validate the ancestry of a relative placement being created with parent
+    /// `start_parent` and (optional) own key `child`. Returns .cycle if `child`
+    /// appears in the parent chain, .too_deep if the chain exceeds
+    /// `parent_depth_limit`, else null (ok). A direct self-reference
+    /// (start_parent == child) is the caller's responsibility (EINVAL).
+    pub fn relativeAncestryError(
+        self: *const ImageStorage,
+        start_parent: PlacementKey,
+        child: ?PlacementKey,
+    ) ?RelativeAncestryError {
+        var key = start_parent;
+        var depth: usize = 1; // the child -> start_parent hop
+        while (true) {
+            if (child) |c| {
+                if (std.meta.eql(key, c)) return .cycle;
+            }
+            const p = self.placements.get(key) orelse return null;
+            switch (p.location) {
+                .relative => |rel| {
+                    if (depth >= parent_depth_limit) return .too_deep;
+                    depth += 1;
+                    key = rel.parent;
+                },
+                // Reached a root (pin/virtual): chain is finite and in-bounds.
+                else => return null,
+            }
+        }
+    }
+
     fn clearPlacements(self: *ImageStorage, s: *terminal.Screen) void {
         var it = self.placements.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(s);
@@ -331,7 +468,7 @@ pub const ImageStorage = struct {
                 while (it.next()) |entry| {
                     // Skip virtual placements
                     switch (entry.value_ptr.location) {
-                        .pin => {},
+                        .pin, .relative => {},
                         .virtual => continue,
                     }
 
@@ -433,7 +570,7 @@ pub const ImageStorage = struct {
                 var it = self.placements.iterator();
                 while (it.next()) |entry| {
                     const img = self.imageById(entry.key_ptr.image_id) orelse continue;
-                    const rect = entry.value_ptr.rect(img, t) orelse continue;
+                    const rect = entry.value_ptr.rect(img, t, self) orelse continue;
                     if (rect.top_left.x <= x and rect.bottom_right.x >= x) {
                         entry.value_ptr.deinit(t.screens.active);
                         self.placements.removeByPtr(entry.key_ptr);
@@ -457,7 +594,7 @@ pub const ImageStorage = struct {
                 var it = self.placements.iterator();
                 while (it.next()) |entry| {
                     const img = self.imageById(entry.key_ptr.image_id) orelse continue;
-                    const rect = entry.value_ptr.rect(img, t) orelse continue;
+                    const rect = entry.value_ptr.rect(img, t, self) orelse continue;
 
                     // We need to copy our pin to ensure we are at least at
                     // the top-left x.
@@ -475,7 +612,7 @@ pub const ImageStorage = struct {
                 var it = self.placements.iterator();
                 while (it.next()) |entry| {
                     switch (entry.value_ptr.location) {
-                        .pin => {},
+                        .pin, .relative => {},
 
                         // Virtual placeholders cannot delete by z according
                         // to the spec.
@@ -583,7 +720,7 @@ pub const ImageStorage = struct {
         var it = self.placements.iterator();
         while (it.next()) |entry| {
             const img = self.imageById(entry.key_ptr.image_id) orelse continue;
-            const rect = entry.value_ptr.rect(img, t) orelse continue;
+            const rect = entry.value_ptr.rect(img, t, self) orelse continue;
             if (target_pin.isBetween(rect.top_left, rect.bottom_right)) {
                 if (filter) |f| if (!f(filter_ctx, entry.value_ptr.*)) continue;
                 entry.value_ptr.deinit(t.screens.active);
@@ -740,6 +877,22 @@ pub const ImageStorage = struct {
 
             /// Virtual placement (U=1) for unicode placeholders.
             virtual: void,
+
+            /// Relative placement (P/Q/H/V): positioned relative to a parent
+            /// placement. The parent is resolved and bound at creation time so
+            /// `parent` is a concrete key. The position is derived by walking
+            /// the parent chain at resolution time (see ImageStorage.resolvePin),
+            /// so a relative placement has no pin of its own.
+            relative: Relative,
+        };
+
+        pub const Relative = struct {
+            /// The resolved parent placement this is positioned relative to.
+            parent: PlacementKey,
+
+            /// Cell offset from the parent's top-left (H/V), signed.
+            offset_x: i32 = 0,
+            offset_y: i32 = 0,
         };
 
         pub fn deinit(
@@ -748,7 +901,7 @@ pub const ImageStorage = struct {
         ) void {
             switch (self.location) {
                 .pin => |p| s.pages.untrackPin(p),
-                .virtual => {},
+                .virtual, .relative => {},
             }
         }
 
@@ -874,12 +1027,13 @@ pub const ImageStorage = struct {
             self: Placement,
             image: Image,
             t: *const terminal.Terminal,
+            storage: *const ImageStorage,
         ) ?Rect {
             const grid_size = self.gridSize(image, t);
-            const pin = switch (self.location) {
-                .pin => |p| p,
-                .virtual => return null,
-            };
+
+            // Resolve the top-left position. For relative placements this walks
+            // the parent chain; for virtual placements there is no rect.
+            const pin = storage.resolvePin(&self, t) orelse return null;
 
             var br = switch (pin.downOverflow(grid_size.rows - 1)) {
                 .offset => |v| v,
@@ -894,7 +1048,7 @@ pub const ImageStorage = struct {
             );
 
             return .{
-                .top_left = pin.*,
+                .top_left = pin,
                 .bottom_right = br,
             };
         }
@@ -1598,4 +1752,76 @@ test "storage: no-op delete does not mark a mutation" {
     s.delete(alloc, &t, .{ .id = .{ .image_id = 1 } });
     try testing.expect(s.dirty);
     try testing.expect(s.generation > gen);
+}
+
+test "storage: relative placement resolves to parent position + offset" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 30, .rows = 30 });
+    defer t.deinit(alloc);
+    t.width_px = 30;
+    t.height_px = 30;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(alloc, .{ .id = 1, .width = 10, .height = 10 });
+    try s.addImage(alloc, .{ .id = 2, .width = 10, .height = 10 });
+
+    // Parent pinned at active (3, 4).
+    try s.addPlacement(alloc, 1, 1, .{
+        .location = .{ .pin = try trackPin(&t, .{ .x = 3, .y = 4 }) },
+    });
+    // Child relative to the parent, offset (+10, +5).
+    try s.addPlacement(alloc, 2, 2, .{
+        .location = .{ .relative = .{
+            .parent = .{
+                .image_id = 1,
+                .placement_id = .{ .tag = .external, .id = 1 },
+            },
+            .offset_x = 10,
+            .offset_y = 5,
+        } },
+    });
+
+    const child = s.placements.get(.{
+        .image_id = 2,
+        .placement_id = .{ .tag = .external, .id = 2 },
+    }).?;
+    const pin = s.resolvePin(&child, &t).?;
+    const pt = t.screens.active.pages.pointFromPin(.active, pin).?;
+    try testing.expectEqual(@as(u32, 13), pt.active.x); // 3 + 10
+    try testing.expectEqual(@as(u32, 9), pt.active.y); // 4 + 5
+}
+
+test "storage: relative placement with missing parent does not resolve" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 30, .rows = 30 });
+    defer t.deinit(alloc);
+    t.width_px = 30;
+    t.height_px = 30;
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(alloc, .{ .id = 2, .width = 10, .height = 10 });
+
+    // Child references a parent placement that does not exist.
+    try s.addPlacement(alloc, 2, 2, .{
+        .location = .{ .relative = .{
+            .parent = .{
+                .image_id = 1,
+                .placement_id = .{ .tag = .external, .id = 1 },
+            },
+            .offset_x = 1,
+            .offset_y = 1,
+        } },
+    });
+
+    const child = s.placements.get(.{
+        .image_id = 2,
+        .placement_id = .{ .tag = .external, .id = 2 },
+    }).?;
+    try testing.expect(s.resolvePin(&child, &t) == null);
 }
