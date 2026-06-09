@@ -311,14 +311,42 @@ pub const LoadingImage = struct {
         var buf_reader = file.reader(&buf);
         const reader = &buf_reader.interface;
 
-        // Read the file
         var managed: std.ArrayList(u8) = .empty;
         errdefer managed.deinit(alloc);
-        const size: usize = if (t.size > 0) @min(t.size, max_size) else max_size;
-        reader.appendRemaining(alloc, &managed, .limited(size)) catch {
-            log.warn("failed to read temporary file: {?}", .{buf_reader.err});
-            return error.InvalidData;
-        };
+
+        // Determine how many bytes to read, in priority order:
+        //   1. exactly S (the size key), if given;
+        //   2. for an uncompressed raw image, exactly width*height*bpp so that
+        //      trailing bytes after the pixel data are ignored;
+        //   3. otherwise (PNG or compressed) read to EOF.
+        // Cases 1 and 2 are exact reads that must ignore any trailing data, so
+        // we cannot use a hard limit: appendRemaining errors (StreamTooLong) as
+        // soon as the source has as many bytes as the limit. We read exactly the
+        // requested count instead, which truncates trailing data and errors only
+        // if fewer bytes are available than declared.
+        const exact: ?usize = if (t.size > 0)
+            @min(@as(usize, t.size), max_size)
+        else if (t.compression == .none and t.format != .png) raw: {
+            const bpp = command.Transmission.formatBpp(t.format);
+            break :raw @min(
+                @as(usize, t.width) * @as(usize, t.height) * bpp,
+                max_size,
+            );
+        } else null;
+
+        if (exact) |n| {
+            try managed.resize(alloc, n);
+            reader.readSliceAll(managed.items) catch {
+                // Fewer bytes are available than were declared/required.
+                log.warn("failed to read file (insufficient data): {?}", .{buf_reader.err});
+                return error.InvalidData;
+            };
+        } else {
+            reader.appendRemaining(alloc, &managed, .limited(max_size)) catch {
+                log.warn("failed to read file: {?}", .{buf_reader.err});
+                return error.InvalidData;
+            };
+        }
 
         // Set our data
         assert(self.data.items.len == 0);
@@ -851,6 +879,203 @@ test "image load: rgb, not compressed, regular file" {
     defer img.deinit(alloc);
     try testing.expect(img.compression == .none);
     try tmp_dir.dir.access(path, .{});
+}
+
+test "image load: raw file ignores trailing data without a size" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var tmp_dir = try temp_dir.TempDir.init();
+    defer tmp_dir.deinit();
+
+    // 20x15 RGB pixel data (900 bytes) followed by 64 bytes of trailing junk.
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    var contents: std.ArrayList(u8) = .empty;
+    defer contents.deinit(alloc);
+    try contents.appendSlice(alloc, pixels);
+    try contents.appendSlice(alloc, &([_]u8{0xFF} ** 64));
+    try tmp_dir.dir.writeFile(.{ .sub_path = "image.data", .data = contents.items });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try tmp_dir.dir.realpath("image.data", &buf);
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    // The read is bounded to width*height*bpp, so the trailing junk is ignored.
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqual(@as(usize, 900), img.data.len);
+}
+
+test "image load: raw file with explicit size ignores trailing data" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var tmp_dir = try temp_dir.TempDir.init();
+    defer tmp_dir.deinit();
+
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    var contents: std.ArrayList(u8) = .empty;
+    defer contents.deinit(alloc);
+    try contents.appendSlice(alloc, pixels);
+    try contents.appendSlice(alloc, &([_]u8{0xFF} ** 64));
+    try tmp_dir.dir.writeFile(.{ .sub_path = "image.data", .data = contents.items });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try tmp_dir.dir.realpath("image.data", &buf);
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .file,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .size = 900,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    // S exactly equals the pixel data; the file is larger but we read only S.
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqual(@as(usize, 900), img.data.len);
+}
+
+test "image load: raw file with size smaller than image errors" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var tmp_dir = try temp_dir.TempDir.init();
+    defer tmp_dir.deinit();
+
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try tmp_dir.dir.writeFile(.{ .sub_path = "image.data", .data = pixels });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try tmp_dir.dir.realpath("image.data", &buf);
+
+    var cmd: command.Command = .{
+        .control = .{
+            .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .size = 100, // fewer bytes than the 900 the image needs
+                .image_id = 31,
+            },
+        },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    try testing.expectError(error.InvalidData, loading.complete(alloc));
+}
+
+test "image load: zlib compressed file with explicit size ignores trailing data" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var tmp_dir = try temp_dir.TempDir.init();
+    defer tmp_dir.deinit();
+
+    // zlib-compressed 128x96 RGB data followed by trailing junk.
+    const zdata = @embedFile("testdata/image-rgb-zlib_deflate-128x96-2147483647-raw.data");
+    var contents: std.ArrayList(u8) = .empty;
+    defer contents.deinit(alloc);
+    try contents.appendSlice(alloc, zdata);
+    try contents.appendSlice(alloc, &([_]u8{0xFF} ** 64));
+    try tmp_dir.dir.writeFile(.{ .sub_path = "image.data", .data = contents.items });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try tmp_dir.dir.realpath("image.data", &buf);
+
+    var cmd: command.Command = .{
+        .control = .{
+            .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .compression = .zlib_deflate,
+                .width = 128,
+                .height = 96,
+                .size = @intCast(zdata.len), // exact compressed size
+                .image_id = 31,
+            },
+        },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    // S bounds the compressed read; the trailing junk is not fed to inflate.
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+    try testing.expectEqual(@as(usize, 128 * 96 * 3), img.data.len);
+}
+
+test "image load: png file with explicit size ignores trailing data" {
+    if (sys.decode_png == null) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var tmp_dir = try temp_dir.TempDir.init();
+    defer tmp_dir.deinit();
+
+    const png = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
+    var contents: std.ArrayList(u8) = .empty;
+    defer contents.deinit(alloc);
+    try contents.appendSlice(alloc, png);
+    try contents.appendSlice(alloc, &([_]u8{0xFF} ** 64));
+    try tmp_dir.dir.writeFile(.{ .sub_path = "image.data", .data = contents.items });
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = try tmp_dir.dir.realpath("image.data", &buf);
+
+    var cmd: command.Command = .{
+        .control = .{
+            .transmit = .{
+                .format = .png,
+                .medium = .file,
+                .compression = .none,
+                .size = @intCast(png.len), // exact PNG byte count
+                .image_id = 31,
+            },
+        },
+        .data = try alloc.dupe(u8, path),
+    };
+    defer cmd.deinit(alloc);
+
+    // S bounds the read to the PNG stream; trailing junk is ignored.
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.format == .rgba);
+    try testing.expect(img.data.len > 0);
 }
 
 test "image load: png, not compressed, regular file" {
