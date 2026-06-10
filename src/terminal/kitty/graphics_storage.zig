@@ -415,6 +415,34 @@ pub const ImageStorage = struct {
         }
     }
 
+    /// Remove relative placements whose parent placement no longer exists,
+    /// transitively. This implements the "group" lifetime from the spec:
+    /// deleting or evicting a parent placement cascades to its relative
+    /// descendants. Relative placements own no screen resources (they have no
+    /// pin — see Placement.deinit), so removal needs neither a screen nor an
+    /// allocator.
+    fn removeOrphanedRelatives(self: *ImageStorage) void {
+        // We restart the scan after each removal because removing an entry
+        // invalidates the iterator, and because removing one orphan can orphan
+        // its own children (transitive cascade). Placement counts are small.
+        while (true) {
+            var removed = false;
+            var it = self.placements.iterator();
+            while (it.next()) |entry| {
+                const rel = switch (entry.value_ptr.location) {
+                    .relative => |r| r,
+                    else => continue,
+                };
+                if (self.placements.contains(rel.parent)) continue;
+                self.placements.removeByPtr(entry.key_ptr);
+                self.dirty = true;
+                removed = true;
+                break;
+            }
+            if (!removed) break;
+        }
+    }
+
     fn clearPlacements(self: *ImageStorage, s: *terminal.Screen) void {
         var it = self.placements.iterator();
         while (it.next()) |entry| entry.value_ptr.deinit(s);
@@ -653,6 +681,9 @@ pub const ImageStorage = struct {
             // deleted!
             .animation_frames => {},
         }
+
+        // Any relative placement whose parent was just removed is cascaded.
+        self.removeOrphanedRelatives();
     }
 
     fn deleteById(
@@ -812,6 +843,7 @@ pub const ImageStorage = struct {
 
         // They're in order of best to evict.
         var evicted: usize = 0;
+        var enough = false;
         for (candidates.items) |c| {
             // Delete all the placements for this image and the image.
             var p_it = self.placements.iterator();
@@ -832,11 +864,18 @@ pub const ImageStorage = struct {
                 self.images.removeByPtr(entry.key_ptr);
                 any_evicted = true;
 
-                if (evicted > req) return true;
+                if (evicted > req) {
+                    enough = true;
+                    break;
+                }
             }
         }
 
-        return false;
+        // Evicting an image removes its placements, which can orphan relative
+        // placements that pointed at them; cascade those away too.
+        self.removeOrphanedRelatives();
+
+        return enough;
     }
 
     /// Every placement is uniquely identified by the image ID and the

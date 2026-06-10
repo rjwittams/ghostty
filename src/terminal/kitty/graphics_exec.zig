@@ -895,3 +895,80 @@ test "kittygfx relative placement: does not move the cursor" {
     try testing.expectEqual(cx, t.screens.active.cursor.x);
     try testing.expectEqual(cy, t.screens.active.cursor.y);
 }
+
+test "kittygfx relative placement: deleting a parent cascades to descendants" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 240, .width = 2, .height = 2 });
+    try storage.addImage(alloc, .{ .id = 241, .width = 2, .height = 2 });
+
+    // root (240,1) pin; child (241,2) rel root; grandchild (240,3) rel child.
+    for ([_][]const u8{
+        "a=p,i=240,p=1,c=2,r=2",
+        "a=p,i=241,p=2,P=240,Q=1,H=1,V=1,c=2,r=2",
+        "a=p,i=240,p=3,P=241,Q=2,H=1,V=1,c=2,r=2",
+    }) |s| {
+        const cmd = try command.Parser.parseString(alloc, s);
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+    try testing.expectEqual(@as(usize, 3), storage.placements.count());
+
+    // Delete the middle parent (the child). Its descendant (grandchild) must
+    // cascade away; the root remains.
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=d,d=i,i=241,p=2");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+
+    try testing.expect(storage.placements.get(.{
+        .image_id = 240,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }) != null); // root remains
+    try testing.expect(storage.placements.get(.{
+        .image_id = 241,
+        .placement_id = .{ .tag = .external, .id = 2 },
+    }) == null); // child deleted
+    try testing.expect(storage.placements.get(.{
+        .image_id = 240,
+        .placement_id = .{ .tag = .external, .id = 3 },
+    }) == null); // grandchild cascaded
+    try testing.expectEqual(@as(usize, 1), storage.placements.count());
+}
+
+test "kittygfx relative placement: deleting root removes the whole group" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try Terminal.init(alloc, .{ .rows = 10, .cols = 20 });
+    defer t.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{ .id = 240, .width = 2, .height = 2 });
+    try storage.addImage(alloc, .{ .id = 241, .width = 2, .height = 2 });
+
+    for ([_][]const u8{
+        "a=p,i=240,p=1,c=2,r=2",
+        "a=p,i=241,p=2,P=240,Q=1,H=1,V=1,c=2,r=2",
+        "a=p,i=240,p=3,P=241,Q=2,H=1,V=1,c=2,r=2",
+    }) |s| {
+        const cmd = try command.Parser.parseString(alloc, s);
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+
+    // Delete the root placement; the entire relative group cascades away.
+    {
+        const cmd = try command.Parser.parseString(alloc, "a=d,d=i,i=240,p=1");
+        defer cmd.deinit(alloc);
+        _ = execute(alloc, &t, &cmd);
+    }
+
+    try testing.expectEqual(@as(usize, 0), storage.placements.count());
+}
