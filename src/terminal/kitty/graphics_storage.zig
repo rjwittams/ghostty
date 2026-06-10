@@ -7,6 +7,7 @@ const terminal = @import("../main.zig");
 const point = @import("../point.zig");
 const size = @import("../size.zig");
 const command = @import("graphics_command.zig");
+const graphics_unicode = @import("graphics_unicode.zig");
 const PageList = @import("../PageList.zig");
 const Screen = @import("../Screen.zig");
 const LoadingImage = @import("graphics_image.zig").LoadingImage;
@@ -307,17 +308,28 @@ pub const ImageStorage = struct {
         switch (p.location) {
             .pin => |pin| return pin.*,
 
-            // Virtual placements have no direct pin; a relative placement whose
-            // parent is virtual is resolved in a later milestone (M3).
+            // A directly-queried virtual placement has no pin: it is drawn by
+            // the unicode placeholder iterator, not as a normal placement. This
+            // arm MUST stay null — returning a pin here would make the renderer
+            // (and placement_rect) draw the whole image at the placeholder
+            // position in addition to its fragments (a double render). Virtual
+            // placements only resolve to a position when they are the PARENT of
+            // a relative placement, handled in the .relative arm below.
             .virtual => return null,
 
             .relative => |rel| {
                 if (depth >= parent_depth_limit) return null;
 
-                // Look up and resolve the parent's top-left.
+                // Look up and resolve the parent's top-left. If the parent is a
+                // virtual placement, derive its position from its placeholder
+                // cells; otherwise recurse through the parent chain.
                 const parent = self.placements.get(rel.parent) orelse return null;
-                const base = self.resolvePinDepth(&parent, t, depth + 1) orelse
-                    return null;
+                const base = switch (parent.location) {
+                    .virtual => self.resolveVirtualPin(rel.parent, t) orelse
+                        return null,
+                    else => self.resolvePinDepth(&parent, t, depth + 1) orelse
+                        return null,
+                };
 
                 // Apply the vertical cell offset.
                 var pin: PageList.Pin = base;
@@ -343,6 +355,82 @@ pub const ImageStorage = struct {
                 return pin;
             },
         }
+    }
+
+    /// Resolve the storage PlacementKey of the virtual placement referenced by a
+    /// unicode placeholder run that encodes the given image_id and placement_id.
+    ///
+    /// This mirrors the lookup historically inlined in graphics_unicode.grid():
+    /// an explicit (nonzero) placement id names an external-tagged placement;
+    /// id 0 binds to the first virtual placement for the image. The "first"
+    /// choice depends on hash-map iteration order (a pre-existing source of
+    /// nondeterminism when multiple unnamed virtual placements share an image).
+    /// Both grid() and resolveVirtualPin go through this so a placeholder run and
+    /// a relative placement can never disagree about which placement a run names.
+    pub fn virtualPlacementKey(
+        self: *const ImageStorage,
+        image_id: u32,
+        placement_id: u32,
+    ) ?PlacementKey {
+        if (placement_id > 0) {
+            const key: PlacementKey = .{
+                .image_id = image_id,
+                .placement_id = .{ .tag = .external, .id = placement_id },
+            };
+            return if (self.placements.contains(key)) key else null;
+        }
+
+        var it = self.placements.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.image_id == image_id and
+                entry.value_ptr.location == .virtual)
+            {
+                return entry.key_ptr.*;
+            }
+        }
+        return null;
+    }
+
+    /// Resolve the top-left position of a VIRTUAL parent placement from the
+    /// unicode placeholder cells that reference it.
+    ///
+    /// Per the spec the position is the minimum column and minimum row over all
+    /// of the placement's placeholder cells, taken independently (so the corner
+    /// may not coincide with any actual cell). The scan is scoped to the
+    /// viewport, matching the renderer and Kitty: if the placeholders have
+    /// scrolled out of view the parent is unresolvable and the child is dropped.
+    ///
+    /// NOTE: because rect() also feeds delete-by-intersection, a relative child
+    /// of a virtual parent is only intersect-deletable while its parent's
+    /// placeholders are visible. Kitty skips virtual refs in delete filters
+    /// entirely, so this is an acceptable difference.
+    fn resolveVirtualPin(
+        self: *const ImageStorage,
+        parent_key: PlacementKey,
+        t: *const terminal.Terminal,
+    ) ?PageList.Pin {
+        const pages = &t.screens.active.pages;
+        const top = pages.getTopLeft(.viewport);
+        const bot = pages.getBottomRight(.viewport) orelse return null;
+
+        var min_x: ?size.CellCountInt = null;
+        var min_y: ?u32 = null;
+        var it = graphics_unicode.placementIterator(top, bot);
+        while (it.next()) |vp| {
+            // A run matches our parent iff it names the same placement.
+            const key = self.virtualPlacementKey(vp.image_id, vp.placement_id) orelse
+                continue;
+            if (!std.meta.eql(key, parent_key)) continue;
+
+            // Independent mins over the run screen positions. We ignore
+            // vp.col/vp.row — those are image fragment indices, not positions.
+            const pt = pages.pointFromPin(.screen, vp.pin) orelse continue;
+            if (min_x == null or pt.screen.x < min_x.?) min_x = pt.screen.x;
+            if (min_y == null or pt.screen.y < min_y.?) min_y = pt.screen.y;
+        }
+
+        if (min_x == null) return null;
+        return pages.pin(.{ .screen = .{ .x = min_x.?, .y = min_y.? } });
     }
 
     /// Resolve the parent placement referenced by a relative placement's P
@@ -1863,4 +1951,91 @@ test "storage: relative placement with missing parent does not resolve" {
         .placement_id = .{ .tag = .external, .id = 2 },
     }).?;
     try testing.expect(s.resolvePin(&child, &t) == null);
+}
+
+test "storage: relative placement resolves position from a virtual parent" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 20, .rows = 20 });
+    defer t.deinit(alloc);
+    t.width_px = 20;
+    t.height_px = 20;
+    t.modes.set(.grapheme_cluster, true);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(alloc, .{ .id = 42, .width = 10, .height = 10 });
+    try s.addImage(alloc, .{ .id = 43, .width = 10, .height = 10 });
+
+    // Virtual parent placement (image 42, placement 21).
+    try s.addPlacement(alloc, 42, 21, .{
+        .location = .{ .virtual = {} },
+        .columns = 2,
+        .rows = 2,
+    });
+    // Relative child of the virtual parent, offset (+2, +3).
+    try s.addPlacement(alloc, 43, 1, .{
+        .location = .{ .relative = .{
+            .parent = .{
+                .image_id = 42,
+                .placement_id = .{ .tag = .external, .id = 21 },
+            },
+            .offset_x = 2,
+            .offset_y = 3,
+        } },
+        .columns = 2,
+        .rows = 2,
+    });
+
+    // Lay down a placeholder cell for the virtual parent at active (4, 5),
+    // encoding image id 42 (fg) and placement id 21 (underline color).
+    t.setCursorPos(6, 5); // 1-based -> active (x=4, y=5)
+    try t.setAttribute(.{ .@"256_fg" = 42 });
+    try t.setAttribute(.{ .@"256_underline_color" = 21 });
+    try t.printString("\u{10EEEE}\u{0305}\u{0305}");
+
+    const child = s.placements.get(.{
+        .image_id = 43,
+        .placement_id = .{ .tag = .external, .id = 1 },
+    }).?;
+    const image = s.imageById(43).?;
+    const r = child.rect(image, &t, &s).?;
+    const pt = t.screens.active.pages.pointFromPin(.active, r.top_left).?;
+    try testing.expectEqual(@as(@TypeOf(pt.active.x), 6), pt.active.x); // 4 + 2
+    try testing.expectEqual(@as(@TypeOf(pt.active.y), 8), pt.active.y); // 5 + 3
+}
+
+test "storage: directly-queried virtual placement has no rect" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 20, .rows = 20 });
+    defer t.deinit(alloc);
+    t.width_px = 20;
+    t.height_px = 20;
+    t.modes.set(.grapheme_cluster, true);
+
+    var s: ImageStorage = .{};
+    defer s.deinit(alloc, t.screens.active);
+    try s.addImage(alloc, .{ .id = 42, .width = 10, .height = 10 });
+    try s.addPlacement(alloc, 42, 21, .{
+        .location = .{ .virtual = {} },
+        .columns = 2,
+        .rows = 2,
+    });
+
+    // Even with placeholder cells present, a virtual placement queried directly
+    // must have no rect: it is drawn by the placeholder iterator, not as a
+    // normal placement. Returning a rect here would double-render it.
+    t.setAttribute(.{ .@"256_fg" = 42 }) catch unreachable;
+    t.setAttribute(.{ .@"256_underline_color" = 21 }) catch unreachable;
+    try t.printString("\u{10EEEE}\u{0305}\u{0305}");
+
+    const vp = s.placements.get(.{
+        .image_id = 42,
+        .placement_id = .{ .tag = .external, .id = 21 },
+    }).?;
+    const image = s.imageById(42).?;
+    try testing.expect(vp.rect(image, &t, &s) == null);
 }
