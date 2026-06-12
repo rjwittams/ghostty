@@ -59,6 +59,14 @@ pub fn build(b: *std.Build) !void {
             // Clang/GCC-only flags; MSVC doesn't accept these.
             try flags.append(b.allocator, "-fno-exceptions");
             try flags.append(b.allocator, "-fno-rtti");
+        } else {
+            // SIMDUTF_NO_LIBCXX otherwise defaults simdutf to translation-unit
+            // static initialization. That is fragile in Windows (MSVC) DLL
+            // builds: the active implementation can be initialized before the
+            // implementation list it selects from, yielding a null/garbage
+            // active implementation on load. Force lazy (first-use) selection.
+            try flags.append(b.allocator, "-DSIMDUTF_USE_STATIC_INITIALIZATION=0");
+            lib.root_module.addCMacro("SIMDUTF_USE_STATIC_INITIALIZATION", "0");
         }
 
         lib.root_module.addCMacro("SIMDUTF_NO_LIBCXX", "1");
