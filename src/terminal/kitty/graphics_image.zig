@@ -197,28 +197,6 @@ pub const LoadingImage = struct {
             break :stat @intCast(stat.size);
         };
 
-        const expected_size: usize = switch (self.image.format) {
-            // Png we decode the full data size because later decoding will
-            // get the proper dimensions and assert validity.
-            .png => stat_size,
-
-            // For these formats we have a size we must have.
-            .gray, .gray_alpha, .rgb, .rgba => size: {
-                const bpp = command.Transmission.formatBpp(self.image.format);
-                break :size self.image.width * self.image.height * bpp;
-            },
-        };
-
-        // Our stat size must be at least the expected size otherwise
-        // the shared memory data is invalid.
-        if (stat_size < expected_size) {
-            log.warn(
-                "shared memory size too small expected={} actual={}",
-                .{ expected_size, stat_size },
-            );
-            return error.InvalidData;
-        }
-
         const map = std.posix.mmap(
             null,
             stat_size, // mmap always uses the stat size
@@ -232,16 +210,38 @@ pub const LoadingImage = struct {
         };
         defer std.posix.munmap(map);
 
-        // Our end size always uses the expected size so we cut off the
-        // padding for mmap alignment.
+        // Determine the [start, start + count) byte window within the object,
+        // mirroring the file path. The object is at least the data size but is
+        // rounded up to a page, so count is, in priority order:
+        //   1. S (the size key), if given;
+        //   2. width*height*bpp for an uncompressed raw image, cutting off the
+        //      page-alignment padding;
+        //   3. otherwise (PNG or compressed) the remainder of the object from
+        //      the offset; trailing padding is harmless since PNG decoding stops
+        //      at IEND and zlib at the end of the stream.
         const start: usize = @intCast(t.offset);
-        const end: usize = if (t.size > 0) @min(
-            @as(usize, @intCast(t.offset)) + @as(usize, @intCast(t.size)),
-            expected_size,
-        ) else expected_size;
+        const count: usize = if (t.size > 0)
+            @min(@as(usize, t.size), max_size)
+        else if (self.image.compression == .none and self.image.format != .png) raw: {
+            const bpp = command.Transmission.formatBpp(self.image.format);
+            break :raw @min(
+                @as(usize, self.image.width) * @as(usize, self.image.height) * bpp,
+                max_size,
+            );
+        } else @min(if (start <= stat_size) stat_size - start else 0, max_size);
+
+        // The requested window must lie entirely within the object. This also
+        // guards the slice below against start > end, which would panic.
+        if (start > stat_size or count > stat_size - start) {
+            log.warn(
+                "shared memory range out of bounds offset={} size={} object_size={}",
+                .{ start, count, stat_size },
+            );
+            return error.InvalidData;
+        }
 
         assert(self.data.items.len == 0);
-        try self.data.appendSlice(alloc, map[start..end]);
+        try self.data.appendSlice(alloc, map[start .. start + count]);
     }
 
     /// Reads the data from a temporary file and returns it. This allocates
@@ -1281,4 +1281,148 @@ test "limits: temporary file medium allowed by limits" {
         .shared_memory = false,
     });
     defer loading.deinit(alloc);
+}
+
+/// Create a POSIX shared memory object with the given contents for testing.
+///
+/// The shared memory tests that use this are gated to Linux (see the callers).
+/// On macOS with Zig 0.15.x, std.c.shm_open is declared with a fixed `mode`
+/// argument, but libc's shm_open is variadic; on arm64 the variadic mode is
+/// passed on the stack, so the mode never reaches the kernel and the object is
+/// created unreadable. Zig trunk (0.16) fixes this by declaring darwin's
+/// shm_open variadic (lib/std/c/darwin.zig); the macOS gate can be lifted then.
+fn testCreateShm(name: [:0]const u8, contents: []const u8) !void {
+    _ = std.c.shm_unlink(name); // remove any leftover from a prior run
+    const flags: std.c.O = .{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true };
+    const fd = std.c.shm_open(name, @as(c_int, @bitCast(flags)), 0o600);
+    if (std.posix.errno(fd) != .SUCCESS) return error.SkipZigTest;
+    errdefer _ = std.c.shm_unlink(name);
+    defer _ = std.c.close(fd);
+    try std.posix.ftruncate(fd, contents.len);
+    const map = try std.posix.mmap(
+        null,
+        contents.len,
+        std.c.PROT.READ | std.c.PROT.WRITE,
+        std.c.MAP{ .TYPE = .SHARED },
+        fd,
+        0,
+    );
+    defer std.posix.munmap(map);
+    @memcpy(map[0..contents.len], contents);
+}
+
+test "image load: shared memory raw at offset zero" {
+    // Linux only for now: see testCreateShm for why macOS is excluded until the
+    // Zig 0.16 shm_open fix.
+    if (comptime builtin.target.os.tag != .linux or !builtin.link_libc) {
+        return error.SkipZigTest;
+    }
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const name = "/gtest-shm-raw0";
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try testCreateShm(name, pixels);
+    errdefer _ = std.c.shm_unlink(name);
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .shared_memory,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, name),
+    };
+    defer cmd.deinit(alloc);
+
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqual(@as(usize, 900), img.data.len);
+}
+
+test "image load: shared memory raw at nonzero offset" {
+    // Linux only for now: see testCreateShm for why macOS is excluded until the
+    // Zig 0.16 shm_open fix.
+    if (comptime builtin.target.os.tag != .linux or !builtin.link_libc) {
+        return error.SkipZigTest;
+    }
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    // The object is `offset` bytes of padding followed by the 900-byte image,
+    // so the image must be read from `offset`, not from 0.
+    const offset = 16;
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    var contents: std.ArrayList(u8) = .empty;
+    defer contents.deinit(alloc);
+    try contents.appendNTimes(alloc, 0xAA, offset);
+    try contents.appendSlice(alloc, pixels);
+
+    const name = "/gtest-shm-rawoff";
+    try testCreateShm(name, contents.items);
+    errdefer _ = std.c.shm_unlink(name);
+
+    var cmd: command.Command = .{
+        .control = .{ .transmit = .{
+            .format = .rgb,
+            .medium = .shared_memory,
+            .compression = .none,
+            .width = 20,
+            .height = 15,
+            .offset = offset,
+            .image_id = 31,
+        } },
+        .data = try alloc.dupe(u8, name),
+    };
+    defer cmd.deinit(alloc);
+
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqual(@as(usize, 900), img.data.len);
+    // The bytes read must be the image, not the leading padding.
+    try testing.expectEqualSlices(u8, pixels, img.data);
+}
+
+test "image load: shared memory offset past end errors" {
+    // Linux only for now: see testCreateShm for why macOS is excluded until the
+    // Zig 0.16 shm_open fix.
+    if (comptime builtin.target.os.tag != .linux or !builtin.link_libc) {
+        return error.SkipZigTest;
+    }
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const name = "/gtest-shm-oob";
+    const pixels = @embedFile("testdata/image-rgb-none-20x15-2147483647-raw.data");
+    try testCreateShm(name, pixels);
+    errdefer _ = std.c.shm_unlink(name);
+
+    var cmd: command.Command = .{
+        .control = .{
+            .transmit = .{
+                .format = .rgb,
+                .medium = .shared_memory,
+                .compression = .none,
+                .width = 20,
+                .height = 15,
+                .offset = 1_000_000, // well past the object
+                .image_id = 31,
+            },
+        },
+        .data = try alloc.dupe(u8, name),
+    };
+    defer cmd.deinit(alloc);
+
+    // An out-of-range offset must be rejected, not panic on a bad slice.
+    try testing.expectError(error.InvalidData, LoadingImage.init(alloc, &cmd, .all));
 }
