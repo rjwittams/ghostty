@@ -367,25 +367,15 @@ pub const Placement = struct {
         rows: u32,
         columns: u32,
     } {
-        // Get the placement. If an ID is specified we look for the exact one.
-        // If no ID, then we find the first virtual placement for this image.
-        const placement = if (self.placement_id > 0) storage.placements.get(.{
-            .image_id = self.image_id,
-            .placement_id = .{ .tag = .external, .id = self.placement_id },
-        }) orelse {
-            return Error.PlacementMissingPlacement;
-        } else placement: {
-            var it = storage.placements.iterator();
-            while (it.next()) |entry| {
-                if (entry.key_ptr.image_id == self.image_id and
-                    entry.value_ptr.location == .virtual)
-                {
-                    break :placement entry.value_ptr.*;
-                }
-            }
-
-            return Error.PlacementMissingPlacement;
-        };
+        // Get the placement. If an ID is specified we look for the exact one;
+        // if no ID, we find the first virtual placement for this image. This
+        // lookup is shared with relative-placement parent resolution (see
+        // ImageStorage.virtualPlacementKey) so the two can never disagree.
+        const key = storage.virtualPlacementKey(
+            self.image_id,
+            self.placement_id,
+        ) orelse return Error.PlacementMissingPlacement;
+        const placement = storage.placements.get(key).?;
 
         // Use requested rows/columns if specified
         // For unspecified rows/columns, calculate based on the image size.
