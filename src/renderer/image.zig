@@ -443,8 +443,15 @@ pub const State = struct {
         // Get the viewport-relative Y position of the placement.
         const y_pos: i32 = @as(i32, @intCast(img_top_y)) - @as(i32, @intCast(top_y));
 
-        // Accumulate the placement
-        if (dest_size.width > 0 and dest_size.height > 0) {
+        // Accumulate the placement. We skip placements with an empty source
+        // rectangle: a source crop fully outside the image clamps to a zero
+        // width/height here, and per the Kitty spec the displayed area is the
+        // intersection of the crop with the image, so nothing should be drawn.
+        // Without this guard the zero-size source is sampled with clamp_to_edge
+        // and stretched across the destination as an edge strip.
+        if (dest_size.width > 0 and dest_size.height > 0 and
+            source_width > 0 and source_height > 0)
+        {
             try self.kitty_placements.append(alloc, .{
                 .image_id = .{ .kitty = image.id },
                 .x = @intCast(rect.top_left.x),
@@ -962,3 +969,91 @@ pub const Image = union(enum) {
         };
     }
 };
+
+test "kittyUpdate: skips placement whose source crop is fully outside the image" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 100, .rows = 100 });
+    defer t.deinit(alloc);
+    t.width_px = 100;
+    t.height_px = 100;
+
+    // A 100x100 RGBA image with valid (zeroed) pixel data. The buffer is owned
+    // by the image storage and freed when the terminal deinits.
+    const data = try alloc.alloc(u8, 100 * 100 * 4);
+    @memset(data, 0);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{
+        .id = 1,
+        .width = 100,
+        .height = 100,
+        .format = .rgba,
+        .data = data,
+    });
+
+    // Source rectangle entirely outside the image (source_x=120 > width=100)
+    // clamps to source_width=0, while the destination (cols/rows) is non-zero.
+    try storage.addPlacement(alloc, 1, 1, .{
+        .location = .{ .pin = try t.screens.active.pages.trackPin(
+            t.screens.active.pages.pin(.{ .active = .{ .x = 1, .y = 1 } }).?,
+        ) },
+        .source_x = 120,
+        .source_y = 20,
+        .source_width = 20,
+        .source_height = 40,
+        .columns = 18,
+        .rows = 8,
+    });
+
+    var state: State = .empty;
+    defer state.deinit(alloc);
+    state.kittyUpdate(alloc, &t, .{ .width = 1, .height = 1 });
+
+    // Per the Kitty spec the displayed area is the intersection of the crop
+    // with the image; here that is empty, so nothing should be drawn.
+    try testing.expectEqual(@as(usize, 0), state.kitty_placements.items.len);
+}
+
+test "kittyUpdate: keeps placement whose source crop is partially inside the image" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 100, .rows = 100 });
+    defer t.deinit(alloc);
+    t.width_px = 100;
+    t.height_px = 100;
+
+    const data = try alloc.alloc(u8, 100 * 100 * 4);
+    @memset(data, 0);
+
+    const storage = &t.screens.active.kitty_images;
+    try storage.addImage(alloc, .{
+        .id = 1,
+        .width = 100,
+        .height = 100,
+        .format = .rgba,
+        .data = data,
+    });
+
+    // Source rectangle partially outside (source_x=80, source_width=200) clamps
+    // to a positive source_width=20, so the placement must still be drawn.
+    try storage.addPlacement(alloc, 1, 1, .{
+        .location = .{ .pin = try t.screens.active.pages.trackPin(
+            t.screens.active.pages.pin(.{ .active = .{ .x = 1, .y = 1 } }).?,
+        ) },
+        .source_x = 80,
+        .source_y = 0,
+        .source_width = 200,
+        .source_height = 200,
+        .columns = 18,
+        .rows = 8,
+    });
+
+    var state: State = .empty;
+    defer state.deinit(alloc);
+    state.kittyUpdate(alloc, &t, .{ .width = 1, .height = 1 });
+
+    try testing.expectEqual(@as(usize, 1), state.kitty_placements.items.len);
+}
