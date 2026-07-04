@@ -475,6 +475,55 @@ typedef struct {
 } GhosttyKittyGraphicsPlacementRenderInfo;
 
 /**
+ * Resolved rendering geometry for a Kitty virtual placement fragment.
+ *
+ * Virtual placements are declared in Kitty graphics storage but their
+ * drawable position is encoded by unicode placeholder cells in the terminal
+ * grid. This struct describes one contiguous resolved placeholder fragment
+ * in the current viewport.
+ *
+ * This struct uses the sized-struct ABI pattern. Initialize with
+ * GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsVirtualPlacementInfo) before calling
+ * ghostty_kitty_graphics_virtual_placement_next().
+ *
+ * @ingroup kitty_graphics
+ */
+typedef struct {
+  /** Size of this struct in bytes. Must be set to sizeof(GhosttyKittyGraphicsVirtualPlacementInfo). */
+  size_t size;
+  /** Image ID this virtual placement fragment belongs to. */
+  uint32_t image_id;
+  /** Placement ID from the virtual placement declaration. */
+  uint32_t placement_id;
+  /** Z-index. Virtual placeholder images are currently drawn below text. */
+  int32_t z;
+  /** Viewport-relative column of this fragment. */
+  int32_t viewport_col;
+  /** Viewport-relative row of this fragment. */
+  int32_t viewport_row;
+  /** Number of terminal grid columns represented by this fragment. */
+  uint32_t grid_cols;
+  /** Number of terminal grid rows represented by this fragment. */
+  uint32_t grid_rows;
+  /** Rendered fragment width in pixels. */
+  uint32_t pixel_width;
+  /** Rendered fragment height in pixels. */
+  uint32_t pixel_height;
+  /** Resolved source rectangle x origin in pixels. */
+  uint32_t source_x;
+  /** Resolved source rectangle y origin in pixels. */
+  uint32_t source_y;
+  /** Resolved source rectangle width in pixels. */
+  uint32_t source_width;
+  /** Resolved source rectangle height in pixels. */
+  uint32_t source_height;
+  /** Pixel offset from the left edge of the first cell. */
+  uint32_t x_offset;
+  /** Pixel offset from the top edge of the first cell. */
+  uint32_t y_offset;
+} GhosttyKittyGraphicsVirtualPlacementInfo;
+
+/**
  * Get data from a kitty graphics storage instance.
  *
  * The output pointer must be of the appropriate type for the requested
@@ -849,6 +898,67 @@ GHOSTTY_API GhosttyResult ghostty_kitty_graphics_placement_render_info(
     GhosttyKittyGraphicsImage image,
     GhosttyTerminal terminal,
     GhosttyKittyGraphicsPlacementRenderInfo* out_info);
+
+/**
+ * Create a new resolved virtual placement iterator instance.
+ *
+ * The iterator is owned by the caller and must be reset from a terminal
+ * before use.
+ *
+ * @param allocator Pointer to allocator, or NULL to use the default allocator
+ * @param[out] out_iterator On success, receives the created iterator handle
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_OUT_OF_MEMORY on allocation
+ *         failure
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_iterator_new(
+    const GhosttyAllocator* allocator,
+    GhosttyKittyGraphicsVirtualPlacementIterator* out_iterator);
+
+/**
+ * Free a resolved virtual placement iterator.
+ *
+ * @param iterator The iterator handle to free (may be NULL)
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API void ghostty_kitty_graphics_virtual_placement_iterator_free(
+    GhosttyKittyGraphicsVirtualPlacementIterator iterator);
+
+/**
+ * Reset a virtual placement iterator to the terminal's current viewport.
+ *
+ * The iterator walks resolved unicode placeholder fragments. Iterator data is
+ * only valid while the underlying terminal is not mutated.
+ *
+ * @param iterator The iterator handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param terminal The terminal whose active viewport should be scanned
+ * @return GHOSTTY_SUCCESS on success
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_iterator_reset(
+    GhosttyKittyGraphicsVirtualPlacementIterator iterator,
+    GhosttyTerminal terminal);
+
+/**
+ * Advance to the next resolved virtual placement fragment.
+ *
+ * The output struct must be initialized with
+ * GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsVirtualPlacementInfo). Returns
+ * GHOSTTY_NO_VALUE when there are no more drawable fragments in the current
+ * viewport.
+ *
+ * @param iterator The iterator handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param[out] out_info Pointer to receive the resolved fragment geometry
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE at end of iteration
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_next(
+    GhosttyKittyGraphicsVirtualPlacementIterator iterator,
+    GhosttyKittyGraphicsVirtualPlacementInfo* out_info);
 
 /** @} */
 
