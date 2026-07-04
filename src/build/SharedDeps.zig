@@ -845,6 +845,17 @@ pub fn addSimd(
             "-DSIMDUTF_NO_LIBCXX",
         );
 
+        // Keep the static-initialization mode consistent with how the vendored
+        // simdutf library itself is built (see pkg/simdutf/build.zig): on MSVC,
+        // SIMDUTF_NO_LIBCXX would otherwise force translation-unit static init,
+        // which has an init-order fiasco in Windows DLL builds. The macro
+        // affects header-inlined code, so consumers must define it identically.
+        if (!b.systemIntegrationOption("simdutf", .{}) and
+            target.result.abi == .msvc) try flags.append(
+            b.allocator,
+            "-DSIMDUTF_USE_STATIC_INITIALIZATION=0",
+        );
+
         // Disable ubsan for Windows C/C++ objects to avoid undefined
         // __ubsan_handle_* references. The Zig libraries on Windows don't
         // currently bundle a matching UBSan runtime for these objects in
