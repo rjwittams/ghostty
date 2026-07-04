@@ -270,14 +270,17 @@ pub const LoadingImage = struct {
             return error.InvalidData;
         }
 
-        // Temporary file logic
-        if (medium == .temporary_file) {
-            if (!isPathInTempDir(path)) return error.TemporaryFileNotInTempDir;
-            if (std.mem.indexOf(u8, path, "tty-graphics-protocol") == null) {
-                return error.TemporaryFileNotNamedCorrectly;
-            }
-        }
-        defer if (medium == .temporary_file) {
+        // Temporary file logic. Per the Kitty spec the path/name restrictions
+        // govern whether the terminal may DELETE the file after reading it, not
+        // whether it may read it at all. So we always read the file (the /proc,
+        // /sys, /dev safety check above still applies), but we only unlink it
+        // when it is in a known temporary directory AND its path contains the
+        // "tty-graphics-protocol" marker, to avoid deleting an arbitrary file a
+        // client points us at.
+        defer if (medium == .temporary_file and
+            isPathInTempDir(path) and
+            std.mem.indexOf(u8, path, "tty-graphics-protocol") != null)
+        {
             posix.unlink(path) catch |err| {
                 log.warn("failed to delete temporary file: {}", .{err});
             };
@@ -533,8 +536,6 @@ pub const Image = struct {
         DimensionsRequired,
         DimensionsTooLarge,
         FilePathTooLong,
-        TemporaryFileNotInTempDir,
-        TemporaryFileNotNamedCorrectly,
         UnsupportedFormat,
         UnsupportedMedium,
         UnsupportedDepth,
@@ -748,7 +749,7 @@ test "image load: rgb, zlib compressed, direct, chunked with zero initial chunk"
     try testing.expect(img.compression == .none);
 }
 
-test "image load: temporary file without correct path" {
+test "image load: temporary file without correct name is read but not deleted" {
     const testing = std.testing;
     const alloc = testing.allocator;
 
@@ -775,9 +776,17 @@ test "image load: temporary file without correct path" {
         .data = try alloc.dupe(u8, path),
     };
     defer cmd.deinit(alloc);
-    try testing.expectError(error.TemporaryFileNotNamedCorrectly, LoadingImage.init(alloc, &cmd, .all));
 
-    // Temporary file should still be there
+    // The path/name restriction only gates deletion, not reading: the file is
+    // in a temp dir but lacks the "tty-graphics-protocol" marker, so it must
+    // still load successfully.
+    var loading = try LoadingImage.init(alloc, &cmd, .all);
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expect(img.compression == .none);
+
+    // ...but the file must NOT be deleted, since it is not named correctly.
     try tmp_dir.dir.access(path, .{});
 }
 
