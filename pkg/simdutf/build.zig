@@ -53,6 +53,10 @@ pub fn build(b: *std.Build) !void {
         try flags.append(b.allocator, "-fno-exceptions");
         try flags.append(b.allocator, "-fno-rtti");
         if (target.result.abi == .msvc) {
+            // Select the implementation on first use: translation-unit
+            // initialization order is not reliable when loading a DLL.
+            try flags.append(b.allocator, "-DSIMDUTF_USE_STATIC_INITIALIZATION=0");
+            lib.root_module.addCMacro("SIMDUTF_USE_STATIC_INITIALIZATION", "0");
             try flags.appendSlice(b.allocator, &.{
                 "-D_USE_STD_VECTOR_ALGORITHMS=0",
                 // -fno-autolink also drops UCRT's /alternatename fallback.
