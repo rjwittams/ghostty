@@ -5,6 +5,7 @@ const lib = @import("../lib.zig");
 const CAllocator = lib.alloc.Allocator;
 const kitty_storage = @import("../kitty/graphics_storage.zig");
 const kitty_cmd = @import("../kitty/graphics_command.zig");
+const kitty_unicode = @import("../kitty/graphics_unicode.zig");
 const Image = @import("../kitty/graphics_image.zig").Image;
 const grid_ref = @import("grid_ref.zig");
 const selection_c = @import("selection.zig");
@@ -31,6 +32,12 @@ pub const PlacementIterator = if (build_options.kitty_graphics)
 else
     ?*anyopaque;
 
+/// C: GhosttyKittyGraphicsVirtualPlacementIterator
+pub const VirtualPlacementIterator = if (build_options.kitty_graphics)
+    ?*VirtualPlacementIteratorWrapper
+else
+    ?*anyopaque;
+
 const PlacementMap = if (build_options.kitty_graphics)
     std.AutoHashMapUnmanaged(
         kitty_storage.ImageStorage.PlacementKey,
@@ -45,6 +52,15 @@ const PlacementIteratorWrapper = if (build_options.kitty_graphics)
         inner: PlacementMap.Iterator = undefined,
         entry: ?PlacementMap.Entry = null,
         layer_filter: PlacementLayer = .all,
+    }
+else
+    void;
+
+const VirtualPlacementIteratorWrapper = if (build_options.kitty_graphics)
+    struct {
+        alloc: std.mem.Allocator,
+        terminal: ?*Terminal = null,
+        inner: ?kitty_unicode.PlacementIterator = null,
     }
 else
     void;
@@ -583,6 +599,123 @@ pub fn placement_render_info(
     out.source_height = source.height;
 
     return .success;
+}
+
+/// C: GhosttyKittyGraphicsVirtualPlacementInfo
+pub const VirtualPlacementInfo = extern struct {
+    size: usize = @sizeOf(VirtualPlacementInfo),
+    image_id: u32 = 0,
+    placement_id: u32 = 0,
+    z: i32 = -1,
+    viewport_col: i32 = 0,
+    viewport_row: i32 = 0,
+    grid_cols: u32 = 0,
+    grid_rows: u32 = 0,
+    pixel_width: u32 = 0,
+    pixel_height: u32 = 0,
+    source_x: u32 = 0,
+    source_y: u32 = 0,
+    source_width: u32 = 0,
+    source_height: u32 = 0,
+    x_offset: u32 = 0,
+    y_offset: u32 = 0,
+};
+
+pub fn virtual_placement_iterator_new(
+    alloc_: ?*const CAllocator,
+    out: *VirtualPlacementIterator,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) {
+        out.* = null;
+        return .no_value;
+    }
+    const alloc = lib.alloc.default(alloc_);
+    const ptr = alloc.create(VirtualPlacementIteratorWrapper) catch {
+        out.* = null;
+        return .out_of_memory;
+    };
+    ptr.* = .{ .alloc = alloc };
+    out.* = ptr;
+    return .success;
+}
+
+pub fn virtual_placement_iterator_free(iter_: VirtualPlacementIterator) callconv(lib.calling_conv) void {
+    if (comptime !build_options.kitty_graphics) return;
+    const iter = iter_ orelse return;
+    iter.alloc.destroy(iter);
+}
+
+pub fn virtual_placement_iterator_reset(
+    iter_: VirtualPlacementIterator,
+    terminal_: terminal_c.Terminal,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) return .no_value;
+
+    const iter = iter_ orelse return .invalid_value;
+    const wrapper = terminal_ orelse return .invalid_value;
+    const t = wrapper.terminal;
+    const pages = &t.screens.active.pages;
+    const top = pages.getTopLeft(.viewport);
+    const bot = pages.getBottomRight(.viewport) orelse return .no_value;
+    iter.terminal = t;
+    iter.inner = kitty_unicode.placementIterator(top, bot);
+    return .success;
+}
+
+pub fn virtual_placement_next(
+    iter_: VirtualPlacementIterator,
+    out_: ?*VirtualPlacementInfo,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) return .no_value;
+
+    const iter = iter_ orelse return .invalid_value;
+    const t = iter.terminal orelse return .invalid_value;
+    const out = out_ orelse return .invalid_value;
+    if (out.size < @sizeOf(VirtualPlacementInfo)) return .invalid_value;
+    const inner = if (iter.inner) |*inner| inner else return .invalid_value;
+    const storage = &t.screens.active.kitty_images;
+
+    const cell_width = if (t.cols == 0) 0 else t.width_px / t.cols;
+    const cell_height = if (t.rows == 0) 0 else t.height_px / t.rows;
+    if (cell_width == 0 or cell_height == 0) return .no_value;
+
+    while (inner.next()) |virtual_p| {
+        const image = storage.imageById(virtual_p.image_id) orelse continue;
+        const rp = virtual_p.renderPlacement(
+            storage,
+            &image,
+            cell_width,
+            cell_height,
+        ) catch continue;
+        if (rp.dest_width == 0 or rp.dest_height == 0) continue;
+
+        const viewport = t.screens.active.pages.pointFromPin(
+            .viewport,
+            rp.top_left,
+        ) orelse continue;
+
+        out.* = .{
+            .size = out.size,
+            .image_id = image.id,
+            .placement_id = virtual_p.placement_id,
+            .z = -1,
+            .viewport_col = @intCast(viewport.viewport.x),
+            .viewport_row = @intCast(viewport.viewport.y),
+            .grid_cols = virtual_p.width,
+            .grid_rows = virtual_p.height,
+            .pixel_width = rp.dest_width,
+            .pixel_height = rp.dest_height,
+            .source_x = rp.source_x,
+            .source_y = rp.source_y,
+            .source_width = rp.source_width,
+            .source_height = rp.source_height,
+            .x_offset = rp.offset_x,
+            .y_offset = rp.offset_y,
+        };
+        return .success;
+    }
+
+    return .no_value;
 }
 
 /// Compute viewport-relative position of a placement.
@@ -1760,6 +1893,115 @@ test "placement_render_info null returns invalid_value" {
 
     var ri: PlacementRenderInfo = .{};
     try testing.expectEqual(Result.invalid_value, placement_render_info(null, null, null, &ri));
+}
+
+test "virtual placement iterator resolves placeholder rows" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib.alloc.test_allocator,
+        &t,
+        10,
+        4,
+    ));
+    defer terminal_c.free(t);
+    try testing.expectEqual(Result.success, terminal_c.resize(t, 10, 4, 10, 10));
+
+    // Transmit a 4x2 RGB image and declare it as a virtual placement spanning
+    // 4 columns x 2 rows. The 24 bytes are all 0xff, encoded as 32 '/' chars.
+    const transmit = "\x1b_Ga=T,t=d,f=24,i=1,U=1,s=4,v=2,c=4,r=2;" ++
+        "////////////////////////////////" ++
+        "\x1b\\";
+    terminal_c.vt_write(t, transmit.ptr, transmit.len);
+
+    const row0 = "\x1b[38;2;0;0;1m" ++
+        "\u{10EEEE}\u{0305}\u{0305}" ++
+        "\u{10EEEE}\u{0305}\u{030D}" ++
+        "\u{10EEEE}\u{0305}\u{030E}" ++
+        "\u{10EEEE}\u{0305}\u{0310}" ++
+        "\x1b[39m";
+    const row1 = "\x1b[2;1H\x1b[38;2;0;0;1m" ++
+        "\u{10EEEE}\u{030D}\u{0305}" ++
+        "\u{10EEEE}\u{030D}\u{030D}" ++
+        "\u{10EEEE}\u{030D}\u{030E}" ++
+        "\u{10EEEE}\u{030D}\u{0310}" ++
+        "\x1b[39m";
+    terminal_c.vt_write(t, row0.ptr, row0.len);
+    terminal_c.vt_write(t, row1.ptr, row1.len);
+
+    var iter: VirtualPlacementIterator = null;
+    try testing.expectEqual(Result.success, virtual_placement_iterator_new(&lib.alloc.test_allocator, &iter));
+    defer virtual_placement_iterator_free(iter);
+    try testing.expectEqual(Result.success, virtual_placement_iterator_reset(iter, t));
+
+    var info: VirtualPlacementInfo = .{};
+    try testing.expectEqual(Result.success, virtual_placement_next(iter, &info));
+    try testing.expectEqual(1, info.image_id);
+    try testing.expectEqual(0, info.placement_id);
+    try testing.expectEqual(@as(i32, -1), info.z);
+    try testing.expectEqual(@as(i32, 0), info.viewport_col);
+    try testing.expectEqual(@as(i32, 0), info.viewport_row);
+    try testing.expectEqual(4, info.grid_cols);
+    try testing.expectEqual(1, info.grid_rows);
+    try testing.expectEqual(40, info.pixel_width);
+    try testing.expectEqual(10, info.pixel_height);
+    try testing.expectEqual(0, info.source_x);
+    try testing.expectEqual(0, info.source_y);
+    try testing.expectEqual(4, info.source_width);
+    try testing.expectEqual(1, info.source_height);
+    try testing.expectEqual(0, info.x_offset);
+    try testing.expectEqual(0, info.y_offset);
+
+    try testing.expectEqual(Result.success, virtual_placement_next(iter, &info));
+    try testing.expectEqual(@as(i32, 0), info.viewport_col);
+    try testing.expectEqual(@as(i32, 1), info.viewport_row);
+    try testing.expectEqual(4, info.grid_cols);
+    try testing.expectEqual(1, info.grid_rows);
+    try testing.expectEqual(40, info.pixel_width);
+    try testing.expectEqual(10, info.pixel_height);
+    try testing.expectEqual(0, info.source_x);
+    try testing.expectEqual(1, info.source_y);
+    try testing.expectEqual(4, info.source_width);
+    try testing.expectEqual(1, info.source_height);
+
+    try testing.expectEqual(Result.no_value, virtual_placement_next(iter, &info));
+}
+
+test "virtual placement iterator reset without cell size returns no placements" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib.alloc.test_allocator,
+        &t,
+        10,
+        4,
+    ));
+    defer terminal_c.free(t);
+
+    var iter: VirtualPlacementIterator = null;
+    try testing.expectEqual(Result.success, virtual_placement_iterator_new(&lib.alloc.test_allocator, &iter));
+    defer virtual_placement_iterator_free(iter);
+    try testing.expectEqual(Result.success, virtual_placement_iterator_reset(iter, t));
+
+    var info: VirtualPlacementInfo = .{};
+    try testing.expectEqual(Result.no_value, virtual_placement_next(iter, &info));
+}
+
+test "virtual placement iterator invalid inputs" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+
+    var iter: VirtualPlacementIterator = null;
+    try testing.expectEqual(Result.invalid_value, virtual_placement_iterator_reset(null, null));
+    try testing.expectEqual(Result.invalid_value, virtual_placement_next(null, null));
+    try testing.expectEqual(Result.success, virtual_placement_iterator_new(&lib.alloc.test_allocator, &iter));
+    defer virtual_placement_iterator_free(iter);
+
+    var info: VirtualPlacementInfo = .{};
+    try testing.expectEqual(Result.invalid_value, virtual_placement_next(iter, &info));
+    info.size = @sizeOf(usize) - 1;
+    try testing.expectEqual(Result.invalid_value, virtual_placement_next(iter, &info));
 }
 
 test "image_get_multi success" {
