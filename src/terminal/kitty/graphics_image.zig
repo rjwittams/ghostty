@@ -420,11 +420,18 @@ pub const LoadingImage = struct {
         // Read the file
         var managed: std.ArrayList(u8) = .empty;
         errdefer managed.deinit(alloc);
-        if (t.size > 0) {
-            // S is the exact number of bytes to read, not a maximum:
-            // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
-            const size = std.math.cast(usize, t.size) orelse
-                return error.InvalidData;
+        // Explicit S bounds encoded data. Without S, uncompressed raw
+        // images need exactly their pixel bytes, even in a larger file.
+        const exact_size: ?usize = if (t.size > 0)
+            std.math.cast(usize, t.size) orelse return error.InvalidData
+        else if (t.compression == .none and t.format != .png) raw: {
+            if (t.width > max_dimension or t.height > max_dimension) {
+                return error.DimensionsTooLarge;
+            }
+            break :raw @as(usize, t.width) * @as(usize, t.height) *
+                command.Transmission.formatBpp(t.format);
+        } else null;
+        if (exact_size) |size| {
             if (size > max_size) return error.InvalidData;
 
             // Read exact size
@@ -1797,4 +1804,57 @@ test "limits: temporary file medium allowed by limits" {
         },
     );
     defer loading.deinit(alloc);
+}
+
+test "image load: raw file without size ignores trailing bytes" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "image.data",
+        .data = &.{ 1, 2, 3, 4, 5, 6 },
+    });
+
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = path_buf[0..try tmp_dir.dir.realPathFile(
+        io,
+        "image.data",
+        &path_buf,
+    )];
+
+    const cases = [_]struct {
+        offset: u32,
+        expected: [3]u8,
+    }{
+        .{ .offset = 0, .expected = .{ 1, 2, 3 } },
+        .{ .offset = 3, .expected = .{ 4, 5, 6 } },
+    };
+    for (cases) |case| {
+        var cmd: command.Command = .{
+            .control = .{ .transmit = .{
+                .format = .rgb,
+                .medium = .file,
+                .width = 1,
+                .height = 1,
+                .offset = case.offset,
+                .image_id = 31,
+            } },
+            .data = try alloc.dupe(u8, path),
+        };
+        defer cmd.deinit(alloc);
+
+        var loading = try LoadingImage.init(io, alloc, &cmd, .{
+            .file = true,
+            .temporary_file = .disabled,
+            .shared_memory = false,
+        });
+        defer loading.deinit(alloc);
+        var img = try loading.complete(alloc);
+        defer img.deinit(alloc);
+
+        try testing.expectEqualSlices(u8, &case.expected, img.data.complete);
+    }
 }
