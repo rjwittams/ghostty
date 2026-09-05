@@ -383,17 +383,14 @@ pub const LoadingImage = struct {
         // Temporary file logic
         if (medium == .temporary_file) {
             assert(self.temporary_directory != null);
-            if (!isPathInTempDir(
-                io,
-                self.temporary_directory.?,
-                abs_path,
-            )) return error.TemporaryFileNotInTempDir;
-            if (std.mem.indexOf(
-                u8,
-                abs_path,
-                "tty-graphics-protocol",
-            ) == null) return error.TemporaryFileNotNamedCorrectly;
-            delete_path = abs_path;
+            // The protocol restricts deletion, not reading. Keep the opened
+            // file validation above for every medium, but only arm cleanup
+            // when both temporary-file deletion conditions hold.
+            if (isPathInTempDir(io, self.temporary_directory.?, abs_path) and
+                std.mem.indexOf(u8, abs_path, "tty-graphics-protocol") != null)
+            {
+                delete_path = abs_path;
+            }
         }
 
         // File must be a regular file
@@ -1174,7 +1171,7 @@ test "image load: rgb, zlib compressed, direct, chunked with zero initial chunk"
     try testing.expect(img.compression == .none);
 }
 
-test "image load: temporary file without correct path" {
+test "image load: temporary file without correct name is read but not deleted" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
@@ -1203,18 +1200,22 @@ test "image load: temporary file without correct path" {
     };
     defer cmd.deinit(alloc);
     var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    try testing.expectError(error.TemporaryFileNotNamedCorrectly, LoadingImage.init(
+    var loading = try LoadingImage.init(
         io,
         alloc,
         &cmd,
         .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
-    ));
+    );
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqualSlices(u8, data, img.data.complete);
 
     // Temporary file should still be there
     try tmp_dir.dir.access(testing.io, path, .{});
 }
 
-test "image load: temporary file outside directory prefix is rejected" {
+test "image load: temporary file outside directory prefix is read but not deleted" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
@@ -1253,12 +1254,13 @@ test "image load: temporary file outside directory prefix is rejected" {
         .data = try alloc.dupe(u8, outside_path),
     };
     defer cmd.deinit(alloc);
-    try testing.expectError(
-        error.TemporaryFileNotInTempDir,
-        LoadingImage.init(io, alloc, &cmd, .allWithTempDir(trusted_path)),
-    );
+    var loading = try LoadingImage.init(io, alloc, &cmd, .allWithTempDir(trusted_path));
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqualSlices(u8, data, img.data.complete);
 
-    // Rejection must happen before temporary-file cleanup is armed.
+    // Reading a file outside the temporary directory must not delete it.
     try outside_dir.access(io, filename, .{});
 }
 
