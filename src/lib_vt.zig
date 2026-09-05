@@ -399,6 +399,10 @@ comptime {
             @export(&c.kitty_graphics_placement_viewport_pos, .{ .name = "ghostty_kitty_graphics_placement_viewport_pos" });
             @export(&c.kitty_graphics_placement_source_rect, .{ .name = "ghostty_kitty_graphics_placement_source_rect" });
             @export(&c.kitty_graphics_placement_render_info, .{ .name = "ghostty_kitty_graphics_placement_render_info" });
+            @export(&c.kitty_graphics_virtual_placement_iterator_new, .{ .name = "ghostty_kitty_graphics_virtual_placement_iterator_new" });
+            @export(&c.kitty_graphics_virtual_placement_iterator_free, .{ .name = "ghostty_kitty_graphics_virtual_placement_iterator_free" });
+            @export(&c.kitty_graphics_virtual_placement_iterator_reset, .{ .name = "ghostty_kitty_graphics_virtual_placement_iterator_reset" });
+            @export(&c.kitty_graphics_virtual_placement_next, .{ .name = "ghostty_kitty_graphics_virtual_placement_next" });
         }
         if (features.grid_introspection) {
             @export(&c.grid_ref_cell, .{ .name = "ghostty_grid_ref_cell" });
