@@ -403,18 +403,21 @@ pub const LoadingImage = struct {
         // Temporary file logic
         if (medium == .temporary_file) {
             assert(self.temporary_directory != null);
-            if (!try isPathInTempDir(
+            // The protocol restricts deletion, not reading. Keep the opened
+            // file validation above for every medium, but only arm cleanup
+            // when both temporary-file deletion conditions hold.
+            if (try isPathInTempDir(
                 io,
                 alloc,
                 self.temporary_directory.?,
                 abs_path,
-            )) return error.TemporaryFileNotInTempDir;
-            if (std.mem.indexOf(
+            ) and std.mem.indexOf(
                 u8,
                 abs_path,
                 "tty-graphics-protocol",
-            ) == null) return error.TemporaryFileNotNamedCorrectly;
-            delete_path = abs_path;
+            ) != null) {
+                delete_path = abs_path;
+            }
         }
 
         // File must be a regular file
@@ -492,6 +495,15 @@ pub const LoadingImage = struct {
         return path;
     }
 
+    /// Directories that are always treated as temporary, as in Kitty.
+    const system_temp_dirs: []const []const u8 = &.{ "/tmp", "/dev/shm" };
+
+    /// Test-only replacement for system_temp_dirs. testing.tmpDir lives
+    /// under the checkout, so tests that need a path outside every
+    /// temporary directory clear this to stay independent of whether the
+    /// checkout itself is under /tmp. Never consulted outside tests.
+    var test_system_temp_dirs: ?[]const []const u8 = null;
+
     /// Returns true if path appears to be in a temporary directory.
     /// Copies logic from Kitty.
     fn isPathInTempDir(
@@ -500,8 +512,13 @@ pub const LoadingImage = struct {
         dir: []const u8,
         path: []const u8,
     ) Allocator.Error!bool {
-        if (isPathInDir("/tmp", path)) return true;
-        if (isPathInDir("/dev/shm", path)) return true;
+        const system_dirs = if (comptime builtin.is_test)
+            test_system_temp_dirs orelse system_temp_dirs
+        else
+            system_temp_dirs;
+        for (system_dirs) |system_dir| {
+            if (isPathInDir(system_dir, path)) return true;
+        }
         if (isPathInDir(dir, path)) return true;
 
         // The temporary dir is sometimes a symlink. On macOS for
@@ -1228,7 +1245,7 @@ test "image load: rgb, zlib compressed, direct, chunked with zero initial chunk"
     try testing.expect(img.compression == .none);
 }
 
-test "image load: temporary file without correct path" {
+test "image load: temporary file without correct name is read but not deleted" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
@@ -1257,21 +1274,30 @@ test "image load: temporary file without correct path" {
     };
     defer cmd.deinit(alloc);
     var dir_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    try testing.expectError(error.TemporaryFileNotNamedCorrectly, LoadingImage.init(
+    var loading = try LoadingImage.init(
         io,
         alloc,
         &cmd,
         .allWithTempDir(dir_path_buf[0..try tmp_dir.dir.realPath(testing.io, &dir_path_buf)]),
-    ));
+    );
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqualSlices(u8, data, img.data.complete);
 
     // Temporary file should still be there
     try tmp_dir.dir.access(testing.io, path, .{});
 }
 
-test "image load: temporary file outside directory prefix is rejected" {
+test "image load: temporary file outside directory prefix is read but not deleted" {
     const testing = std.testing;
     const alloc = testing.allocator;
     const io = testing.io;
+
+    // testing.tmpDir is under the checkout, which may itself be under
+    // /tmp. Trust only the explicit directory so "outside" holds anywhere.
+    LoadingImage.test_system_temp_dirs = &.{};
+    defer LoadingImage.test_system_temp_dirs = null;
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -1307,12 +1333,13 @@ test "image load: temporary file outside directory prefix is rejected" {
         .data = try alloc.dupe(u8, outside_path),
     };
     defer cmd.deinit(alloc);
-    try testing.expectError(
-        error.TemporaryFileNotInTempDir,
-        LoadingImage.init(io, alloc, &cmd, .allWithTempDir(trusted_path)),
-    );
+    var loading = try LoadingImage.init(io, alloc, &cmd, .allWithTempDir(trusted_path));
+    defer loading.deinit(alloc);
+    var img = try loading.complete(alloc);
+    defer img.deinit(alloc);
+    try testing.expectEqualSlices(u8, data, img.data.complete);
 
-    // Rejection must happen before temporary-file cleanup is armed.
+    // Reading a file outside the temporary directory must not delete it.
     try outside_dir.access(io, filename, .{});
 }
 
