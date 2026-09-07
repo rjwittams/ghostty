@@ -952,6 +952,12 @@ jobs:
       - name: Build libghostty-vt
         run: zig build -Demit-lib-vt
 
+      - name: Test DLL consumer startup
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          call test\windows\test_vt_dll_consumer.cmd zig-out
+
       - name: Test static linking
         working-directory: example/c-vt-static
         run: zig build

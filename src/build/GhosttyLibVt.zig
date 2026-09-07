@@ -360,15 +360,51 @@ fn initLib(
         .output = lib.getEmittedBin(),
     };
 
+    const artifact = if (kind == .shared and target.result.os.tag == .windows)
+        try installWindowsShared(b, lib)
+    else
+        &b.addInstallArtifact(lib, .{}).step;
+
     return .{
         .step = override.step orelse &lib.step,
-        .artifact = &b.addInstallArtifact(lib, .{}).step,
+        .artifact = artifact,
         .kind = kind,
         .output = override.output,
         .dsym = dsymutil,
         .pkg_config = if (pcs) |v| v.shared else null,
         .pkg_config_static = if (pcs) |v| v.static else null,
     };
+}
+
+/// Keep Zig's runtime exports out of the public Windows import library.
+/// In particular, importing _DllMainCRTStartup can prevent a consumer DLL
+/// from linking and running its own CRT startup. The DLL itself is unchanged.
+fn installWindowsShared(b: *std.Build, lib: *std.Build.Step.Compile) !*std.Build.Step {
+    const generator = b.addExecutable(.{
+        .name = "windows_import_def",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/windows_import_def.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const generate = b.addRunArtifact(generator);
+    generate.addFileArg(lib.getEmittedBin());
+    const def = generate.addOutputFileArg("ghostty-vt.def");
+
+    const machine: []const u8 = switch (lib.rootModuleTarget().cpu.arch) {
+        .x86 => "i386",
+        .x86_64 => "i386:x86-64",
+        .arm, .thumb => "arm",
+        .aarch64 => "arm64",
+        else => return error.UnsupportedWindowsArchitecture,
+    };
+    const implib = b.addSystemCommand(&.{ b.graph.zig_exe, "dlltool", "-m", machine, "-d" });
+    implib.addFileArg(def);
+    implib.addArg("-l");
+    const output = implib.addOutputFileArg("ghostty-vt.lib");
+    const artifact_install = b.addInstallArtifact(lib, .{ .implib_dir = .disabled });
+    artifact_install.step.dependOn(&b.addInstallFileWithDir(output, .lib, "ghostty-vt.lib").step);
+    return &artifact_install.step;
 }
 
 /// Builds a shared Darwin library with Apple's linker.
