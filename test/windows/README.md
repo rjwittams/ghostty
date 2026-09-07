@@ -34,3 +34,20 @@ ghostty_info: <version string>
 The ghostty_info call verifies the DLL loads and the CRT is initialized.
 Before the fix, loading the DLL would crash with "access violation writing
 0x0000000000000024".
+
+## libghostty-vt DLL consumer
+
+`test_vt_dll_consumer.cmd` builds a C DLL that links against the installed
+Ghostty VT import library, then loads it from a separate executable. It checks
+that the consumer's own `DllMain` runs and that it can create and free a terminal.
+Run from an MSVC developer prompt after building libghostty-vt:
+
+```
+zig build -Demit-lib-vt=true -Dsimd=true -Doptimize=ReleaseSafe
+test\windows\test_vt_dll_consumer.cmd zig-out
+```
+
+With Zig 0.16's unfiltered import library, the consumer resolves its startup
+symbol from Ghostty and skips its own initialization. This test reports
+`DLL consumer failed: 1`. The installed import library must expose only the
+`ghostty_*` C API; Ghostty's own startup remains in its DLL.
