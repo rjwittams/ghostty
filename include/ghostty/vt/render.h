@@ -637,6 +637,54 @@ GHOSTTY_API GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
                                           GhosttyTerminal terminal);
 
 /**
+ * Capture a full terminal-sized view beginning at a tracked cell's row.
+ *
+ * The origin reference selects its owning screen, which may be an inactive
+ * screen. Near the bottom of the screen the range is shifted upward so it
+ * always spans a full terminal height; ghostty_terminal_viewport_for_ref()
+ * reports the actual range. The anchor itself is not moved.
+ *
+ * A capture never moves the terminal viewport and never consumes terminal,
+ * screen, page or row dirty state, so a live render state updated from the
+ * same terminal sees the same damage as if the capture had not happened.
+ * The application cursor (reported as not visible) and the shared selection
+ * are excluded. Like ghostty_render_state_update(), a capture reads the
+ * terminal as it is now and does not observe render holds (synchronized
+ * output); it is the caller's choice whether to capture during a hold.
+ *
+ * A capture ignores the state's overscan request: it always captures exactly
+ * the terminal height from the range start, with no overscan rows, and
+ * GHOSTTY_RENDER_STATE_DATA_OVERSCAN reads as zero afterwards. The request
+ * itself is kept. Read the result with the existing render-state accessors;
+ * the row iterator yields exactly the captured rows.
+ *
+ * Prefer a dedicated scratch render state for captures. If a render state
+ * that was used for a capture is later updated live, that update is a full
+ * rebuild (with overscan as requested), so incremental state is never mixed
+ * between a capture and the live viewport.
+ *
+ * Terminal access must remain exclusive during this call. On allocation
+ * failure the state is safe to free, recapture or update, but its contents
+ * are unspecified. Owned row, style and grapheme data is valid until the next
+ * update or capture of the state, or until it is freed; hyperlink targets and
+ * image resources still require separate terminal reads.
+ *
+ * @param state The render state handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param terminal The terminal handle to read from
+ * @param origin A tracked reference created on @p terminal
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_INVALID_VALUE for NULL
+ *         arguments or an origin belonging to another terminal,
+ *         GHOSTTY_NO_VALUE for a stale or lost origin, GHOSTTY_OUT_OF_MEMORY
+ *         if allocation fails
+ *
+ * @ingroup render
+ */
+GHOSTTY_API GhosttyResult ghostty_render_state_capture(
+    GhosttyRenderState state,
+    GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin);
+
+/**
  * Begin an update of a render state instance from a terminal.
  *
  * Every begin must be completed with a ghostty_render_state_end_update call

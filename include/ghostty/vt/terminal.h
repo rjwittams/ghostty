@@ -363,6 +363,53 @@ typedef enum GHOSTTY_ENUM_TYPED {
 } GhosttyTerminalScreen;
 
 /**
+ * Non-consuming history observations for one terminal screen.
+ *
+ * Read with ghostty_terminal_history_state(). This is a sized struct:
+ * initialize it with GHOSTTY_INIT_SIZED(GhosttyTerminalHistoryState).
+ *
+ * The serial fields are opaque tokens. Compare them only for equality, and
+ * only between observations of the same terminal and the same
+ * screen_incarnation. Reading them never consumes or resets anything.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. Set via GHOSTTY_INIT_SIZED. */
+  size_t size;
+
+  /** Identifies the screen instance. Changes when the screen is removed
+   * (for example the alternate screen on a full reset) so a later screen
+   * with the same identifier is distinguishable. Other tokens are only
+   * comparable within one incarnation. */
+  uint64_t screen_incarnation;
+
+  /** Changes when the screen is reset (for example a full terminal reset).
+   * A reset also invalidates tracked references on the screen. */
+  uint64_t reset_serial;
+
+  /** Changes whenever scrollback history is erased as a whole, even when
+   * tracked references remain valid. This covers explicit erasure (for
+   * example CSI 3 J) and implicit erasure by the terminal: a resize while
+   * the screen keeps no scrollback, and disabling scrollback by setting
+   * GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES to 0 (setScrollbackMaxBytes(0)),
+   * which erases the retained history immediately. Automatic eviction of
+   * the oldest rows to stay within a limit (including a line limit of 0)
+   * does not change it; it invalidates the affected tracked references
+   * instead. */
+  uint64_t history_clear_serial;
+
+  /** Total rows in the screen, scrollback plus active area. */
+  uint64_t total_rows;
+
+  /** Screen width in columns. */
+  uint16_t cols;
+
+  /** Screen height (active area) in rows. */
+  uint16_t rows;
+} GhosttyTerminalHistoryState;
+
+/**
  * Visual style of the terminal cursor.
  *
  * @ingroup terminal
@@ -3322,6 +3369,126 @@ GHOSTTY_API GhosttyResult ghostty_terminal_point_from_grid_ref(
     const GhosttyGridRef *ref,
     GhosttyPointTag tag,
     GhosttyPointCoordinate *out);
+
+/**
+ * Resolve a grid reference to a point on an explicit screen.
+ *
+ * Like ghostty_terminal_grid_ref(), but the point is interpreted on
+ * @p screen instead of the active screen. This never switches the active
+ * screen. The returned reference has the same borrowed lifetime as one from
+ * ghostty_terminal_grid_ref().
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param screen The screen whose coordinates @p point uses
+ * @param point The point to resolve, relative to @p screen
+ * @param[out] out_ref On success, receives the grid reference (may be NULL)
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if @p screen does not
+ *         currently exist, GHOSTTY_INVALID_VALUE for a NULL terminal, an
+ *         unknown screen, or a point outside the screen
+ *
+ * @ingroup terminal
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_on_screen(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    GhosttyPoint point,
+    GhosttyGridRef *out_ref);
+
+/**
+ * Create a tracked grid reference on an explicit screen.
+ *
+ * Like ghostty_terminal_grid_ref_track(), but the reference is attached to
+ * @p screen instead of the active screen. This never switches the active
+ * screen.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param screen The screen to attach the reference to
+ * @param point The point to track, relative to @p screen
+ * @param[out] out_ref On success, receives the tracked reference handle;
+ *             NULL is written on failure
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if @p screen does not
+ *         currently exist, GHOSTTY_INVALID_VALUE for NULL arguments, an
+ *         unknown screen, or a point outside the screen, or
+ *         GHOSTTY_OUT_OF_MEMORY if allocation fails
+ *
+ * @ingroup terminal
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track_on_screen(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    GhosttyPoint point,
+    GhosttyTrackedGridRef *out_ref);
+
+/**
+ * Move a tracked grid reference to a point on an explicit screen.
+ *
+ * Like ghostty_tracked_grid_ref_set(), but the point is interpreted on
+ * @p screen instead of the active screen. This never switches the active
+ * screen. The reference must belong to @p terminal. On failure the
+ * reference keeps its previous position.
+ *
+ * @param ref The tracked reference to move
+ * @param terminal The terminal that owns @p ref
+ * @param screen The screen to attach the reference to
+ * @param point The new point, relative to @p screen
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if @p screen does not
+ *         currently exist, GHOSTTY_INVALID_VALUE for NULL arguments, a
+ *         reference from another terminal, an unknown screen, or a point
+ *         outside the screen, or GHOSTTY_OUT_OF_MEMORY if allocation fails
+ *
+ * @ingroup terminal
+ */
+GHOSTTY_API GhosttyResult ghostty_tracked_grid_ref_set_on_screen(
+    GhosttyTrackedGridRef ref,
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    GhosttyPoint point);
+
+/**
+ * Read a screen's history observation tokens.
+ *
+ * Nothing is consumed or reset by reading. See GhosttyTerminalHistoryState
+ * for the meaning of each field.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param screen The screen to observe
+ * @param[out] out Receives the observation; must be initialized with
+ *             GHOSTTY_INIT_SIZED(GhosttyTerminalHistoryState)
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE if @p screen does not
+ *         currently exist, GHOSTTY_INVALID_VALUE for NULL arguments, an
+ *         unknown screen, or an undersized @p out
+ *
+ * @ingroup terminal
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_history_state(
+    GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen,
+    GhosttyTerminalHistoryState *out);
+
+/**
+ * Resolve the full-height capture range for a tracked origin.
+ *
+ * The range starts at the origin's row on the origin's owning screen, shifted
+ * upward near the bottom so that it always spans a full terminal height. The
+ * result uses the same validation and normalization as
+ * ghostty_render_state_capture(): offset is the screen row of the first
+ * captured row, len is the terminal height, and total is the screen's total
+ * row count. Neither the terminal viewport nor the anchor is moved.
+ * Requires exclusive terminal access.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param origin A tracked reference created on @p terminal
+ * @param[out] out Receives the capture range
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE for an invalidated
+ *         origin, GHOSTTY_INVALID_VALUE for NULL arguments or an origin
+ *         belonging to another terminal
+ *
+ * @ingroup terminal
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_viewport_for_ref(
+    GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin,
+    GhosttyTerminalScrollbar *out);
 
 /** @} */
 

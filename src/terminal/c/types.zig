@@ -226,6 +226,7 @@ const type_decls = [_]TypeDecl{
     .initStruct("GhosttyTerminalModeConfig", terminal.ModeConfig),
     .initStruct("GhosttyTerminalProgramStatus", terminal.ProgramStatus),
     .initStruct("GhosttyTerminalProgressReport", terminal.ProgressReport),
+    .initStruct("GhosttyTerminalHistoryState", terminal.HistoryState),
     .initStruct("GhosttyTerminalScrollbar", terminal.TerminalScrollbar),
     .initStruct("GhosttyTerminalSemanticPrompt", terminal.SemanticPrompt),
     .initTaggedStruct("GhosttyTerminalScrollViewport", terminal.ScrollViewport, "tag", "value", .generated),

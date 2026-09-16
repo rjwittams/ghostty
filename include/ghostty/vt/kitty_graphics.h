@@ -972,6 +972,88 @@ GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_next(
     GhosttyKittyGraphicsVirtualPlacementIterator iterator,
     GhosttyKittyGraphicsVirtualPlacementInfo* out_info);
 
+/**
+ * Borrow the Kitty graphics storage of the screen owning a capture origin.
+ *
+ * The origin must belong to @p terminal and still be valid. The screen is
+ * the one that owns the origin, which may be an inactive screen. Geometry
+ * resolved against this storage uses the same normalized full-height range
+ * as ghostty_render_state_capture().
+ *
+ * The returned storage and all image and placement handles obtained from it
+ * are borrowed: any terminal mutation invalidates them. Copy any needed
+ * resources before releasing exclusive terminal access.
+ *
+ * @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param origin A tracked reference created on @p terminal
+ * @param[out] out Pointer to receive the borrowed graphics storage
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE for an invalidated
+ *         origin or when Kitty graphics are disabled at build time,
+ *         GHOSTTY_INVALID_VALUE for NULL arguments or an origin belonging to
+ *         another terminal
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_kitty_graphics_for_ref(
+    GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin,
+    GhosttyKittyGraphics* out);
+
+/**
+ * Resolve placement render info against a capture origin.
+ *
+ * Like ghostty_kitty_graphics_placement_render_info(), but the viewport
+ * position is relative to the full-height capture range of @p origin
+ * (see ghostty_terminal_viewport_for_ref()), including on inactive screens.
+ * The iterator and image must come from the storage returned by
+ * ghostty_terminal_kitty_graphics_for_ref() for the same origin. All other
+ * lifetime and result rules match
+ * ghostty_kitty_graphics_placement_render_info().
+ *
+ * @param iterator The placement iterator positioned on a placement
+ * @param image The image handle for the current placement's image
+ * @param terminal The terminal handle
+ * @param origin A tracked reference created on @p terminal
+ * @param[out] out Pointer to receive the render info; must be initialized
+ *             with GHOSTTY_INIT_SIZED(GhosttyKittyGraphicsPlacementRenderInfo)
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE for an invalidated
+ *         origin or when Kitty graphics are disabled at build time,
+ *         GHOSTTY_INVALID_VALUE for NULL or mismatched arguments
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_placement_render_info_for_ref(
+    GhosttyKittyGraphicsPlacementIterator iterator,
+    GhosttyKittyGraphicsImage image,
+    GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin,
+    GhosttyKittyGraphicsPlacementRenderInfo* out);
+
+/**
+ * Reset a virtual placement iterator to a capture origin's range.
+ *
+ * Scans the same full-height range on the origin's owning screen as
+ * ghostty_render_state_capture(). Fragment positions reported by
+ * ghostty_kitty_graphics_virtual_placement_next() are relative to that
+ * range. The iterator is invalid after any terminal mutation. On failure the
+ * iterator's previous range is cleared. Existing virtual placement
+ * visibility and relative-root limitations apply unchanged.
+ *
+ * @param iterator The iterator handle (NULL returns GHOSTTY_INVALID_VALUE)
+ * @param terminal The terminal handle
+ * @param origin A tracked reference created on @p terminal
+ * @return GHOSTTY_SUCCESS on success, GHOSTTY_NO_VALUE for an invalidated
+ *         origin or when Kitty graphics are disabled at build time,
+ *         GHOSTTY_INVALID_VALUE for NULL arguments or an origin belonging to
+ *         another terminal
+ *
+ * @ingroup kitty_graphics
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_iterator_reset_for_ref(
+    GhosttyKittyGraphicsVirtualPlacementIterator iterator,
+    GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin);
+
 /** @} */
 
 #ifdef __cplusplus

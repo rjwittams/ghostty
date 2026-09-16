@@ -108,6 +108,9 @@ const Terminal = @import("Terminal.zig");
 /// With no overscan requested (the default), `row_data` holds exactly
 /// the viewport and indices are viewport y values, as before.
 ///
+/// `capture` ignores the overscan request: it captures exactly `rows`
+/// rows and reports zero `overscan`, keeping the requested layout.
+///
 /// ## Memory
 ///
 /// Note: the render state retains as much memory as possible between updates
@@ -183,6 +186,13 @@ pub const RenderState = struct {
     ///
     /// This is set by the update and should not be modified.
     overscan: Overscan = .{},
+
+    /// True when the last update into this render state was an explicit
+    /// `capture` rather than a live update. The next live update is then
+    /// always a full rebuild, because row_data, `overscan` and
+    /// `viewport_pin` describe the captured view and must not be reused
+    /// incrementally. Set and cleared by updates; do not modify.
+    captured: bool = false,
 
     /// The cached selection so we can avoid expensive selection calculations
     /// if possible.
@@ -506,31 +516,93 @@ pub const RenderState = struct {
     /// future; callers should treat the render state as incomplete
     /// until `endUpdate` is called.
     ///
-    /// This will reset the terminal dirty state since it is consumed
-    /// by this render state update.
+    /// This always reads the live viewport of the active screen. It
+    /// consumes (clears) the terminal, screen, page and row dirty state,
+    /// so there should be a single live consumer per terminal. To read
+    /// an explicit range without consuming anything, use `capture`.
     pub fn beginUpdate(
         self: *RenderState,
         alloc: Allocator,
         t: *Terminal,
     ) Allocator.Error!void {
-        const s: *Screen = t.screens.active;
-        const viewport_pin = s.pages.getTopLeft(.viewport);
+        try self.beginUpdateView(alloc, t, null);
+    }
+
+    /// An explicit, already validated range to capture instead of the live
+    /// viewport: `rows` rows of `screen` starting at the row of `origin`.
+    /// The screen need not be the active screen. The caller owns origin
+    /// validation (the origin row plus `rows - 1` rows below it must exist)
+    /// and must hold exclusive terminal access throughout `capture`.
+    pub const CaptureView = struct {
+        screen: ScreenSet.Key,
+        origin: PageList.Pin,
+    };
+
+    /// Capture a complete, non-consuming snapshot of `view` into this
+    /// render state, read through the normal render-state accessors.
+    ///
+    /// Unlike `update`, this never consumes terminal, screen, page or row
+    /// dirty flags and never moves the terminal viewport, so a separate
+    /// live consumer sees the same damage as if the capture never happened.
+    /// The capture is always a full rebuild. The application cursor and the
+    /// shared selection are excluded.
+    ///
+    /// A capture ignores `overscan_request`: it always captures exactly
+    /// `rows` rows from the view origin and reports `overscan` as zero, so
+    /// `rowDataRange()` is exactly the viewport. The request itself is left
+    /// unchanged (and `row_data` keeps the layout it implies, so
+    /// `viewportStart()` stays valid). If this render state is later used
+    /// for a live update, that update is a full rebuild that captures
+    /// overscan as requested.
+    pub fn capture(
+        self: *RenderState,
+        alloc: Allocator,
+        t: *Terminal,
+        view: CaptureView,
+    ) Allocator.Error!void {
+        // Force the next live update to fully rebuild, even if this
+        // capture fails part way: row_data no longer matches the live
+        // viewport bookkeeping.
+        self.captured = true;
+        try self.beginUpdateView(alloc, t, view);
+        self.endUpdate();
+        // Historical views do not advertise an application cursor.
+        self.cursor.visible = false;
+        self.cursor.viewport = null;
+    }
+
+    fn beginUpdateView(
+        self: *RenderState,
+        alloc: Allocator,
+        t: *Terminal,
+        view: ?CaptureView,
+    ) Allocator.Error!void {
+        const screen_key = if (view) |v| v.screen else t.screens.active_key;
+        const s: *Screen = t.screens.get(screen_key).?;
+        const viewport_pin = if (view) |v| v.origin else s.pages.getTopLeft(.viewport);
 
         // The overscan rows to capture beyond the viewport. The request
         // decides the layout of row_data, and the actual counts are
         // limited to the rows that exist. With no request, everything
         // below behaves exactly as it does without overscan.
+        //
+        // An explicit capture view never captures overscan: it yields
+        // exactly `rows` rows from its origin. It still keeps the
+        // requested row_data layout so `viewportStart()` (which reads the
+        // request) remains consistent with row_data.
         const above_req: usize = self.overscan_request.above;
         const below_req: usize = self.overscan_request.below;
         const row_data_len: usize = above_req + s.pages.rows + below_req;
+        const above_cap: usize = if (view != null) 0 else above_req;
+        const below_cap: usize = if (view != null) 0 else below_req;
 
         // The first captured row and how many rows above the viewport
         // we actually got.
-        const top: struct { pin: PageList.Pin, above: usize } = if (above_req == 0)
+        const top: struct { pin: PageList.Pin, above: usize } = if (above_cap == 0)
             .{ .pin = viewport_pin, .above = 0 }
-        else switch (viewport_pin.upOverflow(above_req)) {
-            .offset => |p| .{ .pin = p, .above = above_req },
-            .overflow => |o| .{ .pin = o.end, .above = above_req - o.remaining },
+        else switch (viewport_pin.upOverflow(above_cap)) {
+            .offset => |p| .{ .pin = p, .above = above_cap },
+            .overflow => |o| .{ .pin = o.end, .above = above_cap - o.remaining },
         };
 
         // How many rows below the viewport we actually get. The page list
@@ -539,11 +611,11 @@ pub const RenderState = struct {
         // loop below so that a change can force a redraw. When new output
         // appears below a scrolled viewport, it can land in an entry that
         // was never built or that held a different row.
-        const below: usize = if (below_req == 0) 0 else below: {
+        const below: usize = if (below_cap == 0) 0 else below: {
             const bottom = viewport_pin.down(s.pages.rows - 1).?;
-            break :below switch (bottom.downOverflow(below_req)) {
-                .offset => below_req,
-                .overflow => |o| below_req - o.remaining,
+            break :below switch (bottom.downOverflow(below_cap)) {
+                .offset => below_cap,
+                .overflow => |o| below_cap - o.remaining,
             };
         };
 
@@ -551,9 +623,15 @@ pub const RenderState = struct {
         const first: usize = above_req - top.above;
 
         const redraw = redraw: {
+            if (view != null) break :redraw true;
+
+            // If the last update was an explicit capture, row_data and
+            // our bookkeeping describe that view, not the live viewport.
+            if (self.captured) break :redraw true;
+
             // If our screen key changed, we need to do a full rebuild
             // because our render state is viewport-specific.
-            if (t.screens.active_key != self.screen) break :redraw true;
+            if (screen_key != self.screen) break :redraw true;
 
             // If our terminal is dirty at all, we do a full rebuild. These
             // dirty values are full-terminal dirty values.
@@ -567,7 +645,7 @@ pub const RenderState = struct {
             // a full screen dirty tracker.
             {
                 const Int = @typeInfo(Screen.Dirty).@"struct".backing_integer.?;
-                const v: Int = @bitCast(t.screens.active.dirty);
+                const v: Int = @bitCast(s.dirty);
                 if (v > 0) break :redraw true;
             }
 
@@ -767,7 +845,7 @@ pub const RenderState = struct {
             // We consume (clear) it now; each node appears at most once in
             // this iteration and we're the only consumer of dirty state.
             const page_dirty = p.dirty;
-            if (page_dirty) p.dirty = false;
+            if (view == null and page_dirty) p.dirty = false;
 
             // Get our contiguous rows for this chunk.
             const page_rows: []page.Row = p.rows.ptr(p.memory)[chunk.start..][0..take];
@@ -817,7 +895,7 @@ pub const RenderState = struct {
 
                     for (page_rows[i..][0..RowDirtyMask.group_len], i..) |*page_row, j| {
                         if (!page_row.dirty) continue;
-                        page_row.dirty = false;
+                        if (view == null) page_row.dirty = false;
                         any_dirty = true;
                         try builder.row(p, page_row, y + j);
                     }
@@ -825,7 +903,7 @@ pub const RenderState = struct {
                 while (i < take) : (i += 1) {
                     const page_row = &page_rows[i];
                     if (!page_row.dirty) continue;
-                    page_row.dirty = false;
+                    if (view == null) page_row.dirty = false;
                     any_dirty = true;
                     try builder.row(p, page_row, y + i);
                 }
@@ -833,7 +911,7 @@ pub const RenderState = struct {
                 // Rebuild every row in the chunk.
                 any_dirty = true;
                 for (page_rows, 0..) |*page_row, i| {
-                    page_row.dirty = false;
+                    if (view == null) page_row.dirty = false;
                     try builder.row(p, page_row, y + i);
                 }
             }
@@ -860,6 +938,7 @@ pub const RenderState = struct {
         // we can cache.
         if (s.selection) |*sel| selection: {
             @branchHint(.unlikely);
+            if (view != null) break :selection;
 
             // Populate our selection cache to avoid some expensive
             // recalculation.
@@ -926,7 +1005,7 @@ pub const RenderState = struct {
         // Handle dirty state.
         if (redraw) {
             // Fully redraw resets some other state.
-            self.screen = t.screens.active_key;
+            self.screen = screen_key;
             self.dirty = .full;
 
             // Note: we don't clear any row_data here because our rebuild
@@ -935,9 +1014,13 @@ pub const RenderState = struct {
             self.dirty = .partial;
         }
 
-        // Clear our dirty flags
-        t.flags.dirty = .{};
-        s.dirty = .{};
+        // Clear our dirty flags. A capture is non-consuming: it leaves
+        // every terminal-owned dirty flag for the live consumer.
+        if (view == null) {
+            t.flags.dirty = .{};
+            s.dirty = .{};
+            self.captured = false;
+        }
     }
 
     /// Complete a prior `beginUpdate` call by performing any deferred
@@ -3030,4 +3113,104 @@ test "overscan selection on overscan rows" {
         sels[vp + state.rows].?,
     );
     try testing.expect(sels[vp + state.rows - 2] == null);
+}
+
+test "capture ignores overscan and keeps the next live update intact" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try Terminal.init(io, alloc, .{
+        .cols = 10,
+        .rows = 10,
+        .max_scrollback_bytes = 1_000_000,
+    });
+    defer t.deinit(alloc);
+
+    // Screen rows 0..49 hold "0".."49". Scroll so that the live viewport
+    // (36..45) has rows both above and below it.
+    try testWriteNumberedLines(&t, 50);
+    t.scrollViewport(.{ .delta = -5 });
+    const pages = &t.screens.active.pages;
+    const live_top = pages.getTopLeft(.viewport);
+
+    var state: RenderState = .empty;
+    defer state.deinit(alloc);
+    const request: RenderState.Overscan = .{ .above = 3, .below = 2 };
+    state.overscan_request = request;
+    try state.update(alloc, &t);
+    try testing.expect(state.overscan.eql(request));
+
+    // Capture a mid-history origin with rows available on both sides.
+    // The capture yields exactly `rows` rows and no overscan rows.
+    const origin = pages.pin(.{ .screen = .{ .y = 20 } }).?;
+    try state.capture(alloc, &t, .{ .screen = .primary, .origin = origin });
+    try testing.expect(state.overscan.eql(.{}));
+    try testing.expect(state.overscan_request.eql(request));
+    try testing.expectEqual(15, state.row_data.len);
+    const range = state.rowDataRange();
+    try testing.expectEqual(state.viewportStart(), range.start);
+    try testing.expectEqual(@as(usize, state.rows), range.end - range.start);
+    for (range.start..range.end, 20..) |idx, n| {
+        try testing.expectEqual(n, testRowNumber(&state, idx).?);
+    }
+    try testing.expect(!state.cursor.visible);
+    try testing.expect(live_top.eql(pages.getTopLeft(.viewport)));
+
+    // The next live update on the same state is a full rebuild with the
+    // requested overscan, identical to a state that never captured.
+    state.dirty = .false;
+    try state.update(alloc, &t);
+    try testing.expectEqual(RenderState.Dirty.full, state.dirty);
+    try testing.expect(state.overscan.eql(request));
+    var fresh: RenderState = .empty;
+    defer fresh.deinit(alloc);
+    fresh.overscan_request = request;
+    try fresh.update(alloc, &t);
+    try testing.expectEqual(fresh.rowDataRange(), state.rowDataRange());
+    const live_range = state.rowDataRange();
+    try testing.expectEqual(@as(usize, 0), live_range.start);
+    try testing.expectEqual(@as(usize, 15), live_range.end);
+    for (live_range.start..live_range.end) |idx| {
+        try testing.expectEqual(testRowNumber(&fresh, idx), testRowNumber(&state, idx));
+    }
+    try testing.expectEqual(36, testRowNumber(&state, state.viewportStart()).?);
+}
+
+test "live update after capture of the same origin rebuilds selection" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try Terminal.init(io, alloc, .{
+        .cols = 10,
+        .rows = 5,
+    });
+    defer t.deinit(alloc);
+
+    const screen = t.screens.active;
+    try screen.select(.init(
+        screen.pages.pin(.{ .active = .{ .x = 0, .y = 1 } }).?,
+        screen.pages.pin(.{ .active = .{ .x = 2, .y = 1 } }).?,
+        false,
+    ));
+
+    var state: RenderState = .empty;
+    defer state.deinit(alloc);
+    try state.update(alloc, &t);
+    try testing.expect(state.row_data.items(.selection)[1] != null);
+
+    // Capturing the live viewport origin itself excludes the selection.
+    const origin = screen.pages.getTopLeft(.viewport);
+    try state.capture(alloc, &t, .{ .screen = .primary, .origin = origin });
+    try testing.expectEqual(null, state.row_data.items(.selection)[1]);
+
+    // Same screen, same viewport pin and nothing dirty: without the
+    // capture marker this would be an incremental no-op that keeps the
+    // capture's rows without selection.
+    state.dirty = .false;
+    try state.update(alloc, &t);
+    try testing.expectEqual(RenderState.Dirty.full, state.dirty);
+    try testing.expect(!state.captured);
+    try testing.expect(state.row_data.items(.selection)[1] != null);
 }

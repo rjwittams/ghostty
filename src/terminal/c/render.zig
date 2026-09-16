@@ -16,6 +16,9 @@ const cell_c = @import("cell.zig");
 const row = @import("row.zig");
 const style_c = @import("style.zig");
 const PageList = @import("../PageList.zig");
+const point = @import("../point.zig");
+const grid_ref_tracked = @import("grid_ref_tracked.zig");
+const view_c = @import("view.zig");
 
 const log = std.log.scoped(.render_state_c);
 
@@ -3075,4 +3078,231 @@ test "render: overscan get_multi and row_get_multi" {
     try testing.expectEqual(row_keys.len, written);
     try testing.expectEqual(@as(i32, -1), vy);
     try testing.expect(!std.meta.eql(id, RowId{}));
+}
+
+/// C: ghostty_render_state_capture. Capture a complete, non-consuming,
+/// full-height view starting at a tracked origin's row into `state`, read
+/// through the normal render-state accessors. Pending option changes are
+/// applied as for an update, but the capture ignores the overscan request:
+/// it always yields exactly `rows` rows and reports zero overscan.
+pub fn capture(
+    state_: RenderState,
+    terminal_: terminal_c.Terminal,
+    origin: grid_ref_tracked.CTrackedGridRef,
+) callconv(lib.calling_conv) Result {
+    const state = state_ orelse return .invalid_value;
+    const v = view_c.resolve(terminal_, origin) catch |err| return view_c.result(err);
+    state.applyOptions();
+    state.state.capture(state.alloc, terminal_.?.terminal, .{
+        .screen = v.key,
+        .origin = v.origin,
+    }) catch return .out_of_memory;
+    return .success;
+}
+
+test "render: scoped capture preserves live damage and rejects stale or foreign anchors" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 10, 3));
+    defer terminal_c.free(t);
+    var other: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &other, 10, 3));
+    defer terminal_c.free(other);
+    var ref: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(t, point.Point.cval(.{ .active = .{} }), &ref));
+    defer grid_ref_tracked.tracked_grid_ref_free(ref);
+    var live: RenderState = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &live));
+    defer free(live);
+    var history: RenderState = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &history));
+    defer free(history);
+    try testing.expectEqual(Result.success, update(live, t));
+    const input = "\x1b[31mA\xcc\x81\xe7\x95\x8c\x1b[0m";
+    terminal_c.vt_write(t, input, input.len);
+    const pages = &t.?.terminal.screens.active.pages;
+    const origin = pages.getTopLeft(.viewport);
+    try testing.expectEqual(Result.success, capture(history, t, ref));
+    try testing.expect(origin.eql(pages.getTopLeft(.viewport)));
+    try testing.expectEqual(Result.success, update(live, t));
+    const h = history.?.state.row_data.items(.cells)[0].items(.raw);
+    const l = live.?.state.row_data.items(.cells)[0].items(.raw);
+    try testing.expectEqual(@as(u21, 'A'), h[0].codepoint());
+    try testing.expectEqual(h[0].codepoint(), l[0].codepoint());
+    try testing.expect(!history.?.state.cursor.visible);
+    try testing.expectEqual(Result.invalid_value, capture(history, other, ref));
+    const alt = "\x1b[?1049hALT";
+    terminal_c.vt_write(t, alt, alt.len);
+    try testing.expectEqual(Result.success, capture(history, t, ref));
+    try testing.expectEqual(@as(u21, 'A'), history.?.state.row_data.items(.cells)[0].items(.raw)[0].codepoint());
+    try testing.expectEqual(terminal_c.TerminalScreen.alternate, t.?.terminal.screens.active_key);
+    terminal_c.reset(t);
+    try testing.expectEqual(Result.no_value, capture(history, t, ref));
+}
+
+test "render: scoped capture normalizes bottom anchor without repositioning it" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 10, 3));
+    defer terminal_c.free(t);
+    var ref: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(t, point.Point.cval(.{ .active = .{ .x = 7, .y = 2 } }), &ref));
+    defer grid_ref_tracked.tracked_grid_ref_free(ref);
+    var viewport: terminal_c.TerminalScrollbar = undefined;
+    try testing.expectEqual(Result.success, view_c.viewport(t, ref, &viewport));
+    try testing.expectEqual(@as(u64, 0), viewport.offset);
+    try testing.expectEqual(@as(u64, 3), viewport.len);
+    try testing.expectEqual(@as(usize, 7), ref.?.pin.x);
+    try testing.expectEqual(@as(usize, 2), ref.?.pin.y);
+}
+
+/// Test helper: the number in the "line N" text of a captured row.
+fn testCapturedLineNumber(
+    state: RenderState,
+    idx: usize,
+) !usize {
+    const raws = state.?.state.row_data.items(.cells)[idx].items(.raw);
+    var buf: [16]u8 = undefined;
+    var len: usize = 0;
+    for (raws[5..]) |cell| {
+        const cp = cell.codepoint();
+        if (cp < '0' or cp > '9') break;
+        buf[len] = @intCast(cp);
+        len += 1;
+    }
+    return std.fmt.parseInt(usize, buf[0..len], 10);
+}
+
+test "render: scoped capture viewport_for_ref reports non-zero offsets" {
+    // Screen rows 0..9 hold "line 0".."line 9"; rows 0..6 are scrollback.
+    const t = try testTerminalWithLines(10, 3, 10);
+    defer terminal_c.free(t);
+    const pages = &t.?.terminal.screens.active.pages;
+    const live_top = pages.getTopLeft(.viewport);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+    defer free(state);
+
+    // A mid-history anchor starts the range at its own row.
+    var mid: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
+        t,
+        point.Point.cval(.{ .screen = .{ .x = 2, .y = 4 } }),
+        &mid,
+    ));
+    defer grid_ref_tracked.tracked_grid_ref_free(mid);
+    var viewport: terminal_c.TerminalScrollbar = undefined;
+    try testing.expectEqual(Result.success, view_c.viewport(t, mid, &viewport));
+    try testing.expectEqual(@as(u64, 10), viewport.total);
+    try testing.expectEqual(@as(u64, 4), viewport.offset);
+    try testing.expectEqual(@as(u64, 3), viewport.len);
+    try testing.expectEqual(Result.success, capture(state, t, mid));
+    try testing.expectEqual(@as(usize, 4), try testCapturedLineNumber(state, 0));
+    try testing.expectEqual(@as(usize, 6), try testCapturedLineNumber(state, 2));
+
+    // Anchors near the bottom shift the range upward to stay full height,
+    // with scrollback above them, without moving the anchor.
+    for ([_]u16{ 1, 2 }) |y| {
+        var bottom: grid_ref_tracked.CTrackedGridRef = null;
+        try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
+            t,
+            point.Point.cval(.{ .active = .{ .x = 3, .y = y } }),
+            &bottom,
+        ));
+        defer grid_ref_tracked.tracked_grid_ref_free(bottom);
+        const before = pages.pointFromPin(.screen, bottom.?.pin.*).?;
+        try testing.expectEqual(Result.success, view_c.viewport(t, bottom, &viewport));
+        try testing.expectEqual(@as(u64, 10), viewport.total);
+        try testing.expectEqual(@as(u64, 7), viewport.offset);
+        try testing.expectEqual(@as(u64, 3), viewport.len);
+        try testing.expectEqual(Result.success, capture(state, t, bottom));
+        try testing.expectEqual(@as(usize, 7), try testCapturedLineNumber(state, 0));
+        try testing.expectEqual(before, pages.pointFromPin(.screen, bottom.?.pin.*).?);
+    }
+
+    try testing.expect(live_top.eql(pages.getTopLeft(.viewport)));
+}
+
+test "render: scoped capture ignores the overscan request" {
+    const rows = 10;
+    const t = try testTerminalWithLines(10, rows, 50);
+    defer terminal_c.free(t);
+    t.?.terminal.scrollViewport(.{ .delta = -5 });
+    const pages = &t.?.terminal.screens.active.pages;
+    const live_top = pages.getTopLeft(.viewport);
+
+    var state: RenderState = null;
+    try testing.expectEqual(Result.success, new(&lib.alloc.test_allocator, &state));
+    defer free(state);
+    const req: Overscan = .{ .above = 3, .below = 2 };
+    try testing.expectEqual(Result.success, set(state, .overscan, @ptrCast(&req)));
+    try testing.expectEqual(Result.success, update(state, t));
+    var list = try testCollectRows(testing.allocator, state);
+    try testing.expectEqual(3 + rows + 2, list.items.len);
+    list.deinit(testing.allocator);
+
+    // A mid-history origin with rows available on both sides still
+    // captures exactly `rows` rows.
+    var ref: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(
+        t,
+        point.Point.cval(.{ .screen = .{ .y = 20 } }),
+        &ref,
+    ));
+    defer grid_ref_tracked.tracked_grid_ref_free(ref);
+    try testing.expectEqual(Result.success, capture(state, t, ref));
+    list = try testCollectRows(testing.allocator, state);
+    try testing.expectEqual(rows, list.items.len);
+    for (list.items, 0..) |entry, y| {
+        try testing.expectEqual(@as(i32, @intCast(y)), entry.viewport_y);
+    }
+    list.deinit(testing.allocator);
+    const vp = state.?.state.viewportStart();
+    try testing.expectEqual(@as(usize, 20), try testCapturedLineNumber(state, vp));
+    var out: Overscan = .{};
+    try testing.expectEqual(Result.success, get(state, .overscan, @ptrCast(&out)));
+    try testing.expectEqual(Overscan{}, out);
+    try testing.expectEqual(Result.success, get(state, .overscan_request, @ptrCast(&out)));
+    try testing.expectEqual(req, out);
+    try testing.expect(live_top.eql(pages.getTopLeft(.viewport)));
+
+    // The following live update captures overscan as requested.
+    try testing.expectEqual(Result.success, update(state, t));
+    try testing.expectEqual(Result.success, get(state, .overscan, @ptrCast(&out)));
+    try testing.expectEqual(req, out);
+    list = try testCollectRows(testing.allocator, state);
+    defer list.deinit(testing.allocator);
+    try testing.expectEqual(3 + rows + 2, list.items.len);
+    try testing.expectEqual(@as(i32, -3), list.items[0].viewport_y);
+    try testing.expectEqual(@as(usize, 32), try testCapturedLineNumber(state, 0));
+}
+
+test "render: scoped capture allocation failures preserve source damage" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 20, 4));
+    defer terminal_c.free(t);
+    const text = "\x1b[31mA\xcc\x81\xe7\x95\x8c\x1b[0m\r\nnext";
+    terminal_c.vt_write(t, text, text.len);
+    var ref: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(t, point.Point.cval(.{ .active = .{} }), &ref));
+    defer grid_ref_tracked.tracked_grid_ref_free(ref);
+    const Exercise = struct {
+        fn run(
+            alloc: Allocator,
+            terminal: terminal_c.Terminal,
+            anchor: grid_ref_tracked.CTrackedGridRef,
+        ) !void {
+            var state: RenderStateWrapper = .{ .alloc = alloc };
+            defer state.state.deinit(alloc);
+            const pages = &terminal.?.terminal.screens.active.pages;
+            const top = pages.getTopLeft(.viewport);
+            defer std.debug.assert(top.eql(pages.getTopLeft(.viewport)));
+            const r = capture(&state, terminal, anchor);
+            if (r == .out_of_memory) return error.OutOfMemory;
+            try testing.expectEqual(Result.success, r);
+            try testing.expectEqual(@as(u21, 'A'), state.state.row_data.items(.cells)[0].items(.raw)[0].codepoint());
+        }
+    };
+    try testing.checkAllAllocationFailures(testing.allocator, Exercise.run, .{ t, ref });
+    // Captures and their failures must not consume this original row damage.
+    try testing.expect(t.?.terminal.screens.active.pages.getTopLeft(.active).rowAndCell().row.dirty);
 }

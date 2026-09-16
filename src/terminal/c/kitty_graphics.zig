@@ -8,9 +8,13 @@ const kitty_cmd = @import("../kitty/graphics_command.zig");
 const kitty_unicode = @import("../kitty/graphics_unicode.zig");
 const Image = @import("../kitty/graphics_image.zig").Image;
 const grid_ref = @import("grid_ref.zig");
+const grid_ref_tracked = @import("grid_ref_tracked.zig");
+const point = @import("../point.zig");
 const selection_c = @import("selection.zig");
 const terminal_c = @import("terminal.zig");
+const view_c = @import("view.zig");
 const Terminal = @import("../Terminal.zig");
+const Screen = @import("../Screen.zig");
 const PageList = @import("../PageList.zig");
 const Result = @import("result.zig").Result;
 
@@ -61,6 +65,8 @@ const VirtualPlacementIteratorWrapper = if (build_options.kitty_graphics)
         alloc: std.mem.Allocator,
         terminal: ?*Terminal = null,
         inner: ?kitty_unicode.PlacementIterator = null,
+        screen: ?*Screen = null,
+        origin: ?PageList.Pin = null,
     }
 else
     void;
@@ -658,6 +664,8 @@ pub fn virtual_placement_iterator_reset(
     const top = pages.getTopLeft(.viewport);
     const bot = pages.getBottomRight(.viewport) orelse return .no_value;
     iter.terminal = t;
+    iter.screen = null;
+    iter.origin = null;
     iter.inner = kitty_unicode.placementIterator(top, bot);
     return .success;
 }
@@ -673,7 +681,8 @@ pub fn virtual_placement_next(
     const out = out_ orelse return .invalid_value;
     if (out.size < @sizeOf(VirtualPlacementInfo)) return .invalid_value;
     const inner = if (iter.inner) |*inner| inner else return .invalid_value;
-    const storage = &t.screens.active.kitty_images;
+    const screen = iter.screen orelse t.screens.active;
+    const storage = &screen.kitty_images;
 
     const cell_width = if (t.cols == 0) 0 else t.width_px / t.cols;
     const cell_height = if (t.rows == 0) 0 else t.height_px / t.rows;
@@ -689,18 +698,19 @@ pub fn virtual_placement_next(
         ) catch continue;
         if (rp.dest_width == 0 or rp.dest_height == 0) continue;
 
-        const viewport = t.screens.active.pages.pointFromPin(
-            .viewport,
-            rp.top_left,
-        ) orelse continue;
+        const top = iter.origin orelse screen.pages.getTopLeft(.viewport);
+        const absolute = screen.pages.pointFromPin(.screen, rp.top_left) orelse continue;
+        const top_absolute = screen.pages.pointFromPin(.screen, top) orelse continue;
+        const viewport_col: i32 = @intCast(absolute.screen.x);
+        const viewport_row: i32 = @as(i32, @intCast(absolute.screen.y)) - @as(i32, @intCast(top_absolute.screen.y));
 
         out.* = .{
             .size = out.size,
             .image_id = image.id,
             .placement_id = virtual_p.placement_id,
             .z = -1,
-            .viewport_col = @intCast(viewport.viewport.x),
-            .viewport_row = @intCast(viewport.viewport.y),
+            .viewport_col = viewport_col,
+            .viewport_row = viewport_row,
             .grid_cols = virtual_p.width,
             .grid_rows = virtual_p.height,
             .pixel_width = rp.dest_width,
@@ -734,7 +744,28 @@ fn computeViewportPos(
     p: *const kitty_storage.ImageStorage.Placement,
     image: *const Image,
     t: *Terminal,
-) struct { col: i32, row: i32, visible: bool } {
+) ViewportPosition {
+    return viewportPosForOrigin(
+        p,
+        image,
+        t,
+        t.screens.active,
+        t.screens.active.pages.getTopLeft(.viewport),
+    );
+}
+
+/// A placement position relative to a full-height origin row.
+const ViewportPosition = struct { col: i32, row: i32, visible: bool };
+
+/// Like `computeViewportPos`, but against an explicit screen (which need
+/// not be active) and the top-left pin of a full-height range on it.
+fn viewportPosForOrigin(
+    p: *const kitty_storage.ImageStorage.Placement,
+    image: *const Image,
+    t: *Terminal,
+    screen: *Screen,
+    top: PageList.Pin,
+) ViewportPosition {
     // Virtual placements use unicode placeholders and don't have a
     // screen position — they are rendered inline by the text layout.
     // Relative placements are anchored at the root of their parent
@@ -750,7 +781,7 @@ fn computeViewportPos(
         .pin => |pin| .{ .pin = pin },
         .virtual => return .{ .col = 0, .row = 0, .visible = false },
         .relative => |rel| origin: {
-            const storage = &t.screens.active.kitty_images;
+            const storage = &screen.kitty_images;
             const chain = storage.resolveChain(rel) orelse
                 return .{ .col = 0, .row = 0, .visible = false };
             switch (chain.root.location) {
@@ -771,10 +802,10 @@ fn computeViewportPos(
     // Convert both the placement's pin and the viewport's top-left
     // corner to screen-absolute coordinates so we can subtract them
     // to get viewport-relative coordinates.
-    const pages = &t.screens.active.pages;
+    const pages = &screen.pages;
     const pin_screen = pages.pointFromPin(.screen, pin.*) orelse
         return .{ .col = 0, .row = 0, .visible = false };
-    const vp_tl = pages.getTopLeft(.viewport);
+    const vp_tl = top;
     const vp_screen = pages.pointFromPin(.screen, vp_tl) orelse
         return .{ .col = 0, .row = 0, .visible = false };
 
@@ -2377,4 +2408,227 @@ test "generation never recurs across resets and screen switches" {
     try testing.expectEqual(Result.success, terminal_c.get(t, .kitty_graphics, @ptrCast(&graphics)));
     try testing.expectEqual(Result.success, get(graphics, .generation, @ptrCast(&gen)));
     try testing.expect(gen > gen_alt);
+}
+
+/// C: ghostty_terminal_kitty_graphics_for_ref. Borrow the graphics storage
+/// of the screen that owns a capture origin.
+pub fn graphics_for_ref(
+    terminal_: terminal_c.Terminal,
+    origin: grid_ref_tracked.CTrackedGridRef,
+    out_: ?*?KittyGraphics,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) return .no_value;
+    const out = out_ orelse return .invalid_value;
+    const v = view_c.resolve(terminal_, origin) catch |err| return view_c.result(err);
+    out.* = &v.screen.kitty_images;
+    return .success;
+}
+
+/// C: ghostty_kitty_graphics_placement_render_info_for_ref. Like
+/// `placement_render_info`, but resolves the viewport position against the
+/// capture range of a tracked origin, including on inactive screens.
+pub fn placement_render_info_for_ref(
+    iter_: PlacementIterator,
+    image_: ImageHandle,
+    terminal_: terminal_c.Terminal,
+    origin: grid_ref_tracked.CTrackedGridRef,
+    out_: ?*PlacementRenderInfo,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) return .no_value;
+    const v = view_c.resolve(terminal_, origin) catch |err| return view_c.result(err);
+    const image = image_ orelse return .invalid_value;
+    const iter = iter_ orelse return .invalid_value;
+    const entry = iter.entry orelse return .invalid_value;
+    const out = out_ orelse return .invalid_value;
+    if (out.size < @sizeOf(PlacementRenderInfo)) return .invalid_value;
+    const placement = entry.value_ptr;
+    const ps = placement.pixelSize(image.*, terminal_.?.terminal);
+    const gs = placement.gridSize(image.*, terminal_.?.terminal);
+    const source = placement.sourceRect(image.*);
+    out.pixel_width = ps.width;
+    out.pixel_height = ps.height;
+    out.grid_cols = gs.cols;
+    out.grid_rows = gs.rows;
+    out.source_x = source.x;
+    out.source_y = source.y;
+    out.source_width = source.width;
+    out.source_height = source.height;
+    const vp = viewportPosForOrigin(
+        entry.value_ptr,
+        image,
+        terminal_.?.terminal,
+        v.screen,
+        v.origin,
+    );
+    out.viewport_col = vp.col;
+    out.viewport_row = vp.row;
+    out.viewport_visible = vp.visible;
+    return .success;
+}
+
+/// C: ghostty_kitty_graphics_virtual_placement_iterator_reset_for_ref.
+/// Reset placeholder scanning to the capture range of a tracked origin.
+pub fn virtual_placement_iterator_reset_for_ref(
+    iter_: VirtualPlacementIterator,
+    terminal_: terminal_c.Terminal,
+    origin: grid_ref_tracked.CTrackedGridRef,
+) callconv(lib.calling_conv) Result {
+    if (comptime !build_options.kitty_graphics) return .no_value;
+    const iter = iter_ orelse return .invalid_value;
+    // A failed reset must not leave a usable iterator over an old range.
+    iter.inner = null;
+    iter.terminal = null;
+    const v = view_c.resolve(terminal_, origin) catch |err| return view_c.result(err);
+    var bot = v.origin.down(v.screen.pages.rows - 1) orelse return .no_value;
+    bot.x = v.screen.pages.cols - 1;
+    iter.terminal = terminal_.?.terminal;
+    iter.screen = v.screen;
+    iter.origin = v.origin;
+    iter.inner = kitty_unicode.placementIterator(v.origin, bot);
+    return .success;
+}
+
+test "scoped historical virtual image" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib.alloc.test_allocator,
+        &t,
+        10,
+        4,
+    ));
+    defer terminal_c.free(t);
+    try testing.expectEqual(Result.success, terminal_c.resize(t, 10, 4, 10, 10));
+
+    // Transmit a 4x2 RGB image and declare it as a virtual placement spanning
+    // 4 columns x 2 rows. The 24 bytes are all 0xff, encoded as 32 '/' chars.
+    const transmit = "\x1b_Ga=T,t=d,f=24,i=1,U=1,s=4,v=2,c=4,r=2;" ++
+        "////////////////////////////////" ++
+        "\x1b\\";
+    terminal_c.vt_write(t, transmit.ptr, transmit.len);
+
+    const row0 = "\x1b[38;2;0;0;1m" ++
+        "\u{10EEEE}\u{0305}\u{0305}" ++
+        "\u{10EEEE}\u{0305}\u{030D}" ++
+        "\u{10EEEE}\u{0305}\u{030E}" ++
+        "\u{10EEEE}\u{0305}\u{0310}" ++
+        "\x1b[39m";
+    const row1 = "\x1b[2;1H\x1b[38;2;0;0;1m" ++
+        "\u{10EEEE}\u{030D}\u{0305}" ++
+        "\u{10EEEE}\u{030D}\u{030D}" ++
+        "\u{10EEEE}\u{030D}\u{030E}" ++
+        "\u{10EEEE}\u{030D}\u{0310}" ++
+        "\x1b[39m";
+    terminal_c.vt_write(t, row0.ptr, row0.len);
+    terminal_c.vt_write(t, row1.ptr, row1.len);
+
+    var iter: VirtualPlacementIterator = null;
+    try testing.expectEqual(Result.success, virtual_placement_iterator_new(&lib.alloc.test_allocator, &iter));
+    defer virtual_placement_iterator_free(iter);
+    try testing.expectEqual(Result.success, virtual_placement_iterator_reset(iter, t));
+
+    var anchor: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(t, point.Point.cval(.{ .active = .{} }), &anchor));
+    defer grid_ref_tracked.tracked_grid_ref_free(anchor);
+    const advance = "\r\n\r\n\r\n\r\n\r\n\x1b[?1049h";
+    terminal_c.vt_write(t, advance.ptr, advance.len);
+    try testing.expectEqual(.alternate, t.?.terminal.screens.active_key);
+    try testing.expectEqual(Result.success, virtual_placement_iterator_reset_for_ref(iter, t, anchor));
+    var info: VirtualPlacementInfo = .{};
+    try testing.expectEqual(Result.success, virtual_placement_next(iter, &info));
+    try testing.expectEqual(1, info.image_id);
+    try testing.expectEqual(0, info.placement_id);
+    try testing.expectEqual(@as(i32, -1), info.z);
+    try testing.expectEqual(@as(i32, 0), info.viewport_col);
+    try testing.expectEqual(@as(i32, 0), info.viewport_row);
+    try testing.expectEqual(4, info.grid_cols);
+    try testing.expectEqual(1, info.grid_rows);
+    try testing.expectEqual(40, info.pixel_width);
+    try testing.expectEqual(10, info.pixel_height);
+    try testing.expectEqual(0, info.source_x);
+    try testing.expectEqual(0, info.source_y);
+    try testing.expectEqual(4, info.source_width);
+    try testing.expectEqual(1, info.source_height);
+    try testing.expectEqual(0, info.x_offset);
+    try testing.expectEqual(0, info.y_offset);
+
+    try testing.expectEqual(Result.success, virtual_placement_next(iter, &info));
+    try testing.expectEqual(@as(i32, 0), info.viewport_col);
+    try testing.expectEqual(@as(i32, 1), info.viewport_row);
+    try testing.expectEqual(4, info.grid_cols);
+    try testing.expectEqual(1, info.grid_rows);
+    try testing.expectEqual(40, info.pixel_width);
+    try testing.expectEqual(10, info.pixel_height);
+    try testing.expectEqual(0, info.source_x);
+    try testing.expectEqual(1, info.source_y);
+    try testing.expectEqual(4, info.source_width);
+    try testing.expectEqual(1, info.source_height);
+
+    try testing.expectEqual(Result.no_value, virtual_placement_next(iter, &info));
+}
+
+test "scoped historical ordinary image" {
+    if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(
+        &lib.alloc.test_allocator,
+        &t,
+        80,
+        24,
+    ));
+    defer terminal_c.free(t);
+
+    try testing.expectEqual(Result.success, terminal_c.resize(t, 80, 24, 10, 20));
+
+    // Transmit and display at cursor (0,0).
+    const cmd = "\x1b_Ga=T,t=d,f=24,i=1,p=1,s=1,v=2,c=10,r=1;////////\x1b\\";
+    terminal_c.vt_write(t, cmd.ptr, cmd.len);
+
+    var graphics: KittyGraphics = undefined;
+    try testing.expectEqual(Result.success, terminal_c.get(
+        t,
+        .kitty_graphics,
+        @ptrCast(&graphics),
+    ));
+
+    const img = image_get_handle(graphics, 1);
+    try testing.expect(img != null);
+
+    var iter: PlacementIterator = null;
+    try testing.expectEqual(Result.success, placement_iterator_new(
+        &lib.alloc.test_allocator,
+        &iter,
+    ));
+    defer placement_iterator_free(iter);
+
+    try testing.expectEqual(Result.success, get(graphics, .placement_iterator, @ptrCast(&iter)));
+    try testing.expect(placement_iterator_next(iter));
+
+    var col: i32 = undefined;
+    var row: i32 = undefined;
+    try testing.expectEqual(Result.success, placement_viewport_pos(iter, img, t, &col, &row));
+
+    try testing.expectEqual(0, col);
+    try testing.expectEqual(0, row);
+    var anchor: grid_ref_tracked.CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track(t, point.Point.cval(.{ .active = .{} }), &anchor));
+    defer grid_ref_tracked.tracked_grid_ref_free(anchor);
+    const newline = "\r\n";
+    for (0..40) |_| terminal_c.vt_write(t, newline.ptr, newline.len);
+    const alternate = "\x1b[?1049h";
+    terminal_c.vt_write(t, alternate.ptr, alternate.len);
+    // Reacquire borrowed storage/iterators after the terminal mutations.
+    var selected: ?KittyGraphics = null;
+    try testing.expectEqual(Result.success, graphics_for_ref(t, anchor, &selected));
+    try testing.expectEqual(Result.success, get(selected.?, .placement_iterator, @ptrCast(&iter)));
+    try testing.expect(placement_iterator_next(iter));
+    const historical_image = image_get_handle(selected.?, 1);
+    var historical: PlacementRenderInfo = .{};
+    try testing.expectEqual(Result.success, placement_render_info_for_ref(iter, historical_image, t, anchor, &historical));
+    try testing.expect(historical.viewport_visible);
+    try testing.expectEqual(col, historical.viewport_col);
+    try testing.expectEqual(row, historical.viewport_row);
+    try testing.expectEqual(.alternate, t.?.terminal.screens.active_key);
 }

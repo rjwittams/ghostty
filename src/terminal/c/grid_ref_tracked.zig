@@ -22,7 +22,7 @@ pub const TrackedGridRef = struct {
 
     /// Return the PageList that owns this tracked ref's pin, or null if the
     /// owning screen has been removed/reinitialized since the ref was created.
-    fn pageList(ref: *const TrackedGridRef) ?*PageList {
+    pub fn pageList(ref: *const TrackedGridRef) ?*PageList {
         const wrapper = ref.terminal orelse return null;
         const t = wrapper.terminal;
         if (t.screens.generation(ref.screen_key) != ref.screen_generation) return null;
@@ -76,17 +76,33 @@ pub fn tracked_grid_ref_set(
     pt: point.Point.C,
 ) callconv(lib.calling_conv) Result {
     const ref = ref_ orelse return .invalid_value;
+    if (ref.terminal == null or ref.terminal != terminal_) return .invalid_value;
+    const wrapper = terminal_ orelse return .invalid_value;
+    return tracked_grid_ref_set_on_screen(ref_, terminal_, wrapper.terminal.screens.active_key, pt);
+}
+
+/// C: ghostty_tracked_grid_ref_set_on_screen. Like `tracked_grid_ref_set`,
+/// but on an explicit screen. The old reference is preserved on failure.
+pub fn tracked_grid_ref_set_on_screen(
+    ref_: CTrackedGridRef,
+    terminal_: terminal_c.Terminal,
+    key: terminal_c.TerminalScreen,
+    pt: point.Point.C,
+) callconv(lib.calling_conv) Result {
+    const ref = ref_ orelse return .invalid_value;
     const wrapper = terminal_ orelse return .invalid_value;
     if (ref.terminal != terminal_) return .invalid_value;
+    _ = std.enums.fromInt(terminal_c.TerminalScreen, @intFromEnum(key)) orelse return .invalid_value;
 
     const t = wrapper.terminal;
-    const list = &t.screens.active.pages;
+    const screen = t.screens.get(key) orelse return .no_value;
+    const list = &screen.pages;
     const p = list.pin(point.Point.fromC(pt)) orelse return .invalid_value;
     const tracked_pin = list.trackPin(p) catch return .out_of_memory;
 
     if (ref.pageList()) |old_list| old_list.untrackPin(ref.pin);
-    ref.screen_key = t.screens.active_key;
-    ref.screen_generation = t.screens.generation(ref.screen_key);
+    ref.screen_key = key;
+    ref.screen_generation = t.screens.generation(key);
     ref.pin = tracked_pin;
     return .success;
 }
@@ -226,4 +242,94 @@ test "tracked_grid_ref reports no value after terminal free" {
     ));
 
     tracked_grid_ref_free(ref);
+}
+
+test "tracked_grid_ref explicit screen preserves active screen and failed set" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 10, 2));
+    defer terminal_c.free(t);
+    const input = "primary\x1b[?1049halternate";
+    terminal_c.vt_write(t, input, input.len);
+    var ref: CTrackedGridRef = null;
+    const pt = point.Point.cval(.{ .active = .{ .x = 1, .y = 0 } });
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_on_screen(t, .primary, pt, &ref));
+    defer tracked_grid_ref_free(ref);
+    try testing.expectEqual(terminal_c.TerminalScreen.alternate, t.?.terminal.screens.active_key);
+    try testing.expectEqual(terminal_c.TerminalScreen.primary, ref.?.screen_key);
+    const pin = ref.?.pin;
+    try testing.expectEqual(Result.invalid_value, tracked_grid_ref_set_on_screen(ref, t, .primary, point.Point.cval(.{ .active = .{ .x = 99 } })));
+    try testing.expectEqual(pin, ref.?.pin);
+    try testing.expectEqual(Result.success, tracked_grid_ref_set_on_screen(ref, t, .primary, point.Point.cval(.{ .active = .{ .x = 2 } })));
+    try testing.expectEqual(@as(usize, 2), ref.?.pin.x);
+    try testing.expectEqual(terminal_c.TerminalScreen.alternate, t.?.terminal.screens.active_key);
+}
+
+test "tracked_grid_ref history observation distinguishes clear reset and eviction" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 10, 2));
+    defer terminal_c.free(t);
+    const bytes = "one\r\ntwo\r\nthree\r\nfour\r\n";
+    terminal_c.vt_write(t, bytes, bytes.len);
+    var ref: CTrackedGridRef = null;
+    try testing.expectEqual(Result.success, terminal_c.grid_ref_track_on_screen(t, .primary, point.Point.cval(.{ .history = .{} }), &ref));
+    defer tracked_grid_ref_free(ref);
+    var before: terminal_c.HistoryState = .{};
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &before));
+    terminal_c.vt_write(t, "\x1b[3J", 4);
+    var after: terminal_c.HistoryState = .{};
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &after));
+    try testing.expect(after.history_clear_serial != before.history_clear_serial);
+    try testing.expectEqual(before.reset_serial, after.reset_serial);
+    // This is the case validity alone cannot detect.
+    try testing.expect(tracked_grid_ref_has_value(ref));
+    terminal_c.reset(t);
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &before));
+    try testing.expect(before.reset_serial != after.reset_serial);
+    try testing.expectEqual(after.history_clear_serial, before.history_clear_serial);
+    try testing.expect(!tracked_grid_ref_has_value(ref));
+    // Automatic pruning invalidates the anchor but does not look like an
+    // explicit clear or reset to observers.
+    try testing.expectEqual(Result.success, tracked_grid_ref_set(ref, t, point.Point.cval(.{ .active = .{} })));
+    var limit: usize = 0;
+    try testing.expectEqual(Result.success, terminal_c.set(t, .scrollback_max_lines, &limit));
+    for (0..4000) |_| terminal_c.vt_write(t, bytes, bytes.len);
+    try testing.expect(!tracked_grid_ref_has_value(ref));
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &after));
+    try testing.expectEqual(before.reset_serial, after.reset_serial);
+    try testing.expectEqual(before.history_clear_serial, after.history_clear_serial);
+    var bad: terminal_c.HistoryState = .{ .size = 0 };
+    try testing.expectEqual(Result.invalid_value, terminal_c.history_state(t, .primary, &bad));
+    try testing.expectEqual(Result.no_value, terminal_c.history_state(t, .alternate, &after));
+}
+
+test "tracked_grid_ref history clear serial covers implicit erasure" {
+    var t: terminal_c.Terminal = null;
+    try testing.expectEqual(Result.success, terminal_c.new(&lib.alloc.test_allocator, &t, 10, 2));
+    defer terminal_c.free(t);
+    const bytes = "one\r\ntwo\r\nthree\r\nfour\r\n";
+    terminal_c.vt_write(t, bytes, bytes.len);
+
+    var before: terminal_c.HistoryState = .{};
+    var after: terminal_c.HistoryState = .{};
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &before));
+
+    // DECSTR (soft reset) is neither a reset nor a history erasure.
+    terminal_c.vt_write(t, "\x1b[!p", 4);
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &after));
+    try testing.expectEqual(before.reset_serial, after.reset_serial);
+    try testing.expectEqual(before.history_clear_serial, after.history_clear_serial);
+
+    // Disabling scrollback erases retained history immediately.
+    var zero: usize = 0;
+    try testing.expectEqual(Result.success, terminal_c.set(t, .scrollback_max_bytes, &zero));
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &after));
+    try testing.expect(after.history_clear_serial != before.history_clear_serial);
+    try testing.expectEqual(before.reset_serial, after.reset_serial);
+
+    // A resize of a screen without scrollback erases history again.
+    before = after;
+    try testing.expectEqual(Result.success, terminal_c.resize(t, 8, 3, 1, 1));
+    try testing.expectEqual(Result.success, terminal_c.history_state(t, .primary, &after));
+    try testing.expect(after.history_clear_serial != before.history_clear_serial);
+    try testing.expectEqual(before.reset_serial, after.reset_serial);
 }

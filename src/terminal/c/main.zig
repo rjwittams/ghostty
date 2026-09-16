@@ -13,6 +13,7 @@ pub const grid_ref_tracked = @import("grid_ref_tracked.zig");
 pub const io = @import("io.zig");
 pub const kitty_graphics = @import("kitty_graphics.zig");
 pub const kitty_graphics_get = kitty_graphics.get;
+pub const terminal_kitty_graphics_for_ref = kitty_graphics.graphics_for_ref;
 pub const kitty_graphics_image = kitty_graphics.image_get_handle;
 pub const kitty_graphics_image_get = kitty_graphics.image_get;
 pub const kitty_graphics_image_get_multi = kitty_graphics.image_get_multi;
@@ -28,9 +29,11 @@ pub const kitty_graphics_placement_grid_size = kitty_graphics.placement_grid_siz
 pub const kitty_graphics_placement_viewport_pos = kitty_graphics.placement_viewport_pos;
 pub const kitty_graphics_placement_source_rect = kitty_graphics.placement_source_rect;
 pub const kitty_graphics_placement_render_info = kitty_graphics.placement_render_info;
+pub const kitty_graphics_placement_render_info_for_ref = kitty_graphics.placement_render_info_for_ref;
 pub const kitty_graphics_virtual_placement_iterator_new = kitty_graphics.virtual_placement_iterator_new;
 pub const kitty_graphics_virtual_placement_iterator_free = kitty_graphics.virtual_placement_iterator_free;
 pub const kitty_graphics_virtual_placement_iterator_reset = kitty_graphics.virtual_placement_iterator_reset;
+pub const kitty_graphics_virtual_placement_iterator_reset_for_ref = kitty_graphics.virtual_placement_iterator_reset_for_ref;
 pub const kitty_graphics_virtual_placement_next = kitty_graphics.virtual_placement_next;
 pub const types = @import("types.zig");
 pub const modes = @import("modes.zig");
@@ -52,6 +55,7 @@ pub const style = @import("style.zig");
 pub const sys = @import("sys.zig");
 pub const terminal = @import("terminal.zig");
 pub const unicode = @import("unicode.zig");
+pub const view = @import("view.zig");
 
 // The full C API, unexported.
 pub const build_info = buildpkg.get;
@@ -92,6 +96,7 @@ pub const formatter_free = formatter.free;
 pub const render_state_new = render.new;
 pub const render_state_free = render.free;
 pub const render_state_update = render.update;
+pub const render_state_capture = render.capture;
 pub const render_state_begin_update = render.begin_update;
 pub const render_state_end_update = render.end_update;
 pub const render_state_clean = render.clean;
@@ -230,8 +235,12 @@ pub const search_set = search.set;
 pub const search_get = search.get;
 pub const search_get_multi = search.get_multi;
 pub const terminal_grid_ref = terminal.grid_ref;
+pub const terminal_grid_ref_on_screen = terminal.grid_ref_on_screen;
 pub const terminal_grid_ref_track = terminal.grid_ref_track;
+pub const terminal_grid_ref_track_on_screen = terminal.grid_ref_track_on_screen;
 pub const terminal_point_from_grid_ref = terminal.point_from_grid_ref;
+pub const terminal_history_state = terminal.history_state;
+pub const terminal_viewport_for_ref = view.viewport;
 
 pub const snapshot_encode = snapshot.encode;
 pub const snapshot_encode_buf = snapshot.encode_buf;
@@ -260,6 +269,7 @@ pub const tracked_grid_ref_free = grid_ref_tracked.tracked_grid_ref_free;
 pub const tracked_grid_ref_has_value = grid_ref_tracked.tracked_grid_ref_has_value;
 pub const tracked_grid_ref_point = grid_ref_tracked.tracked_grid_ref_point;
 pub const tracked_grid_ref_set = grid_ref_tracked.tracked_grid_ref_set;
+pub const tracked_grid_ref_set_on_screen = grid_ref_tracked.tracked_grid_ref_set_on_screen;
 pub const tracked_grid_ref_snapshot = grid_ref_tracked.tracked_grid_ref_snapshot;
 
 test {
@@ -294,6 +304,7 @@ test {
     _ = terminal;
     _ = types;
     _ = unicode;
+    _ = view;
 
     // We want to make sure we run the tests for the C allocator interface.
     _ = @import("../../lib/allocator.zig");
