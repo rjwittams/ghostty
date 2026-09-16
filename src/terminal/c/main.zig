@@ -297,3 +297,15 @@ test {
     // We want to make sure we run the tests for the C allocator interface.
     _ = @import("../../lib/allocator.zig");
 }
+
+pub const terminal_grid_ref_on_screen = terminal.grid_ref_on_screen;
+pub const terminal_grid_ref_track_on_screen = terminal.grid_ref_track_on_screen;
+pub const terminal_history_state = terminal.history_state;
+pub const tracked_grid_ref_set_on_screen = grid_ref_tracked.tracked_grid_ref_set_on_screen;
+
+pub const render_state_capture = render.capture;
+pub const terminal_viewport_for_ref = @import("view.zig").viewport;
+
+pub const terminal_kitty_graphics_for_ref = kitty_graphics.graphics_for_ref;
+pub const kitty_graphics_placement_render_info_for_ref = kitty_graphics.placement_render_info_for_ref;
+pub const kitty_graphics_virtual_placement_iterator_reset_for_ref = kitty_graphics.virtual_placement_iterator_reset_for_ref;

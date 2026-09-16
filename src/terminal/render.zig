@@ -370,17 +370,36 @@ pub const RenderState = struct {
     ///
     /// This will reset the terminal dirty state since it is consumed
     /// by this render state update.
-    pub fn beginUpdate(
+    /// A validated full-height range. The caller owns origin validation and
+    /// must hold exclusive terminal access throughout capture.
+    pub const CaptureView = struct { screen: ScreenSet.Key, origin: PageList.Pin };
+
+    pub fn capture(self: *RenderState, alloc: Allocator, t: *Terminal, view: CaptureView) Allocator.Error!void {
+        try self.beginUpdateView(alloc, t, view);
+        self.endUpdate();
+        // Historical views do not advertise an application cursor.
+        self.cursor.visible = false;
+        self.cursor.viewport = null;
+    }
+
+    pub fn beginUpdate(self: *RenderState, alloc: Allocator, t: *Terminal) Allocator.Error!void {
+        try self.beginUpdateView(alloc, t, null);
+    }
+
+    fn beginUpdateView(
         self: *RenderState,
         alloc: Allocator,
         t: *Terminal,
+        view: ?CaptureView,
     ) Allocator.Error!void {
-        const s: *Screen = t.screens.active;
-        const viewport_pin = s.pages.getTopLeft(.viewport);
+        const screen_key = if (view) |v| v.screen else t.screens.active_key;
+        const s: *Screen = t.screens.get(screen_key).?;
+        const viewport_pin = if (view) |v| v.origin else s.pages.getTopLeft(.viewport);
         const redraw = redraw: {
+            if (view != null) break :redraw true;
             // If our screen key changed, we need to do a full rebuild
             // because our render state is viewport-specific.
-            if (t.screens.active_key != self.screen) break :redraw true;
+            if (screen_key != self.screen) break :redraw true;
 
             // If our terminal is dirty at all, we do a full rebuild. These
             // dirty values are full-terminal dirty values.
@@ -394,7 +413,7 @@ pub const RenderState = struct {
             // a full screen dirty tracker.
             {
                 const Int = @typeInfo(Screen.Dirty).@"struct".backing_integer.?;
-                const v: Int = @bitCast(t.screens.active.dirty);
+                const v: Int = @bitCast(s.dirty);
                 if (v > 0) break :redraw true;
             }
 
@@ -577,7 +596,7 @@ pub const RenderState = struct {
             // We consume (clear) it now; each node appears at most once in
             // this iteration and we're the only consumer of dirty state.
             const page_dirty = p.dirty;
-            if (page_dirty) p.dirty = false;
+            if (view == null and page_dirty) p.dirty = false;
 
             // Get our contiguous rows for this chunk.
             const page_rows: []page.Row = p.rows.ptr(p.memory)[chunk.start..][0..take];
@@ -627,7 +646,7 @@ pub const RenderState = struct {
 
                     for (page_rows[i..][0..RowDirtyMask.group_len], i..) |*page_row, j| {
                         if (!page_row.dirty) continue;
-                        page_row.dirty = false;
+                        if (view == null) page_row.dirty = false;
                         any_dirty = true;
                         try builder.row(p, page_row, y + j);
                     }
@@ -635,7 +654,7 @@ pub const RenderState = struct {
                 while (i < take) : (i += 1) {
                     const page_row = &page_rows[i];
                     if (!page_row.dirty) continue;
-                    page_row.dirty = false;
+                    if (view == null) page_row.dirty = false;
                     any_dirty = true;
                     try builder.row(p, page_row, y + i);
                 }
@@ -643,7 +662,7 @@ pub const RenderState = struct {
                 // Rebuild every row in the chunk.
                 any_dirty = true;
                 for (page_rows, 0..) |*page_row, i| {
-                    page_row.dirty = false;
+                    if (view == null) page_row.dirty = false;
                     try builder.row(p, page_row, y + i);
                 }
             }
@@ -665,6 +684,7 @@ pub const RenderState = struct {
         // we can cache.
         if (s.selection) |*sel| selection: {
             @branchHint(.unlikely);
+            if (view != null) break :selection;
 
             // Populate our selection cache to avoid some expensive
             // recalculation.
@@ -730,7 +750,7 @@ pub const RenderState = struct {
         // Handle dirty state.
         if (redraw) {
             // Fully redraw resets some other state.
-            self.screen = t.screens.active_key;
+            self.screen = screen_key;
             self.dirty = .full;
 
             // Note: we don't clear any row_data here because our rebuild
@@ -740,8 +760,10 @@ pub const RenderState = struct {
         }
 
         // Clear our dirty flags
-        t.flags.dirty = .{};
-        s.dirty = .{};
+        if (view == null) {
+            t.flags.dirty = .{};
+            s.dirty = .{};
+        }
     }
 
     /// Complete a prior `beginUpdate` call by performing any deferred

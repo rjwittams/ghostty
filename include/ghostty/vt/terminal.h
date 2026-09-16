@@ -289,6 +289,21 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_TERMINAL_SCREEN_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyTerminalScreen;
 
+/** Non-consuming history observations. Initialize size with GHOSTTY_INIT_SIZED.
+ * Tokens are equality-only and scoped to a terminal lifetime and screen
+ * incarnation. Reset changes reset_serial; explicit history erasure changes
+ * history_clear_serial even if tracked references remain valid. Automatic
+ * eviction invalidates affected tracked references instead. */
+typedef struct {
+  size_t size;
+  uint64_t screen_incarnation;
+  uint64_t reset_serial;
+  uint64_t history_clear_serial;
+  uint64_t total_rows;
+  uint16_t cols;
+  uint16_t rows;
+} GhosttyTerminalHistoryState;
+
 /**
  * Visual style of the terminal cursor.
  *
@@ -2422,6 +2437,35 @@ GHOSTTY_API GhosttyResult ghostty_terminal_point_from_grid_ref(
     GhosttyPointCoordinate *out);
 
 /** @} */
+
+/** Explicit-screen forms of grid-reference operations. These never switch
+ * the active screen. Coordinates are relative to the selected screen. An absent
+ * screen returns GHOSTTY_NO_VALUE; an invalid point returns GHOSTTY_INVALID_VALUE.
+ * Tracked-reference set requires the reference to belong to this terminal and
+ * preserves the old reference on failure. Borrowed grid-ref lifetimes are unchanged.
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_on_screen(
+    GhosttyTerminal terminal, GhosttyTerminalScreen screen,
+    GhosttyPoint point, GhosttyGridRef *out_ref);
+GHOSTTY_API GhosttyResult ghostty_terminal_grid_ref_track_on_screen(
+    GhosttyTerminal terminal, GhosttyTerminalScreen screen,
+    GhosttyPoint point, GhosttyTrackedGridRef *out_ref);
+GHOSTTY_API GhosttyResult ghostty_tracked_grid_ref_set_on_screen(
+    GhosttyTrackedGridRef ref, GhosttyTerminal terminal,
+    GhosttyTerminalScreen screen, GhosttyPoint point);
+
+/** Read history state without consuming changes. Returns GHOSTTY_NO_VALUE for
+ * an absent screen, GHOSTTY_INVALID_VALUE for NULL or undersized output. */
+GHOSTTY_API GhosttyResult ghostty_terminal_history_state(
+    GhosttyTerminal terminal, GhosttyTerminalScreen screen,
+    GhosttyTerminalHistoryState *out);
+
+/** Resolve the full-height capture range for a tracked origin, without moving
+ * the terminal viewport or the anchor. Uses the same validation and normalization
+ * as ghostty_render_state_capture. Requires exclusive terminal access. */
+GHOSTTY_API GhosttyResult ghostty_terminal_viewport_for_ref(
+    GhosttyTerminal terminal, GhosttyTrackedGridRef origin,
+    GhosttyTerminalScrollbar *out);
 
 #ifdef __cplusplus
 }

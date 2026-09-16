@@ -291,6 +291,7 @@ comptime {
         }
         if (features.render_state) {
             @export(&c.render_state_new, .{ .name = "ghostty_render_state_new" });
+            @export(&c.render_state_capture, .{ .name = "ghostty_render_state_capture" });
             @export(&c.render_state_update, .{ .name = "ghostty_render_state_update" });
             @export(&c.render_state_begin_update, .{ .name = "ghostty_render_state_begin_update" });
             @export(&c.render_state_end_update, .{ .name = "ghostty_render_state_end_update" });
@@ -362,10 +363,14 @@ comptime {
         // Selections are expressed in grid references, so the untracked
         // reference constructors are required by both features.
         if (features.grid_introspection or features.selection) {
+            @export(&c.terminal_grid_ref_on_screen, .{ .name = "ghostty_terminal_grid_ref_on_screen" });
+            @export(&c.terminal_history_state, .{ .name = "ghostty_terminal_history_state" });
             @export(&c.terminal_grid_ref, .{ .name = "ghostty_terminal_grid_ref" });
             @export(&c.terminal_point_from_grid_ref, .{ .name = "ghostty_terminal_point_from_grid_ref" });
         }
         if (features.grid_introspection) {
+            @export(&c.terminal_grid_ref_track_on_screen, .{ .name = "ghostty_terminal_grid_ref_track_on_screen" });
+            @export(&c.terminal_viewport_for_ref, .{ .name = "ghostty_terminal_viewport_for_ref" });
             @export(&c.terminal_grid_ref_track, .{ .name = "ghostty_terminal_grid_ref_track" });
         }
         if (features.snapshot) {
@@ -383,6 +388,9 @@ comptime {
             @export(&c.snapshot_decoder_decode, .{ .name = "ghostty_snapshot_decoder_decode" });
         }
         if (features.kitty_graphics) {
+            @export(&c.terminal_kitty_graphics_for_ref, .{ .name = "ghostty_terminal_kitty_graphics_for_ref" });
+            @export(&c.kitty_graphics_placement_render_info_for_ref, .{ .name = "ghostty_kitty_graphics_placement_render_info_for_ref" });
+            @export(&c.kitty_graphics_virtual_placement_iterator_reset_for_ref, .{ .name = "ghostty_kitty_graphics_virtual_placement_iterator_reset_for_ref" });
             @export(&c.kitty_graphics_get, .{ .name = "ghostty_kitty_graphics_get" });
             @export(&c.kitty_graphics_image, .{ .name = "ghostty_kitty_graphics_image" });
             @export(&c.kitty_graphics_image_get, .{ .name = "ghostty_kitty_graphics_image_get" });
@@ -413,6 +421,7 @@ comptime {
             @export(&c.tracked_grid_ref_free, .{ .name = "ghostty_tracked_grid_ref_free" });
             @export(&c.tracked_grid_ref_has_value, .{ .name = "ghostty_tracked_grid_ref_has_value" });
             @export(&c.tracked_grid_ref_point, .{ .name = "ghostty_tracked_grid_ref_point" });
+            @export(&c.tracked_grid_ref_set_on_screen, .{ .name = "ghostty_tracked_grid_ref_set_on_screen" });
             @export(&c.tracked_grid_ref_set, .{ .name = "ghostty_tracked_grid_ref_set" });
         }
         if (features.grid_introspection and features.snapshot) {

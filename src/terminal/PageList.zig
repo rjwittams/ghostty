@@ -430,6 +430,11 @@ page_serial: u64,
 /// checked against the live list before its coordinates are used.
 page_serial_epoch: u64,
 
+/// Explicit history erasure token, independent of pin relocation. In-place
+/// reset preserves it; page_serial_epoch separately identifies resets.
+/// Like page_serial, exhausting a u64 is outside the supported lifetime.
+history_clear_serial: u64 = 0,
+
 /// Byte size of the raw backing mappings owned by active page nodes. This is
 /// logical scrollback accounting and does not change while a mapping is
 /// decommitted. It excludes encoded storage and unused preheated pool items.
@@ -5425,6 +5430,7 @@ pub fn eraseHistory(
     self: *PageList,
     bl_pt: ?point.Point,
 ) void {
+    self.history_clear_serial += 1;
     self.eraseRows(.{ .history = .{} }, bl_pt);
 }
 

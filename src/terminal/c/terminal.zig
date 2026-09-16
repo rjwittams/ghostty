@@ -1795,9 +1795,21 @@ pub fn grid_ref(
     pt: point.Point.C,
     out_ref: ?*grid_ref_c.CGridRef,
 ) callconv(lib.calling_conv) Result {
-    const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
+    const wrapper = terminal_ orelse return .invalid_value;
+    return grid_ref_on_screen(terminal_, wrapper.terminal.screens.active_key, pt, out_ref);
+}
+
+pub fn grid_ref_on_screen(
+    terminal_: Terminal,
+    screen_key: TerminalScreen,
+    pt: point.Point.C,
+    out_ref: ?*grid_ref_c.CGridRef,
+) callconv(lib.calling_conv) Result {
+    const t = (terminal_ orelse return .invalid_value).terminal;
+    _ = std.enums.fromInt(TerminalScreen, @intFromEnum(screen_key)) orelse return .invalid_value;
+    const screen = t.screens.get(screen_key) orelse return .no_value;
     const zig_pt: point.Point = .fromC(pt);
-    const p = t.screens.active.pages.pin(zig_pt) orelse
+    const p = screen.pages.pin(zig_pt) orelse
         return .invalid_value;
     if (out_ref) |out| out.* = grid_ref_c.CGridRef.fromPin(p);
     return .success;
@@ -1809,11 +1821,23 @@ pub fn grid_ref_track(
     out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
 ) callconv(lib.calling_conv) Result {
     const wrapper = terminal_ orelse return .invalid_value;
+    return grid_ref_track_on_screen(terminal_, wrapper.terminal.screens.active_key, pt, out_ref);
+}
+
+pub fn grid_ref_track_on_screen(
+    terminal_: Terminal,
+    screen_key: TerminalScreen,
+    pt: point.Point.C,
+    out_ref: ?*grid_ref_tracked_c.CTrackedGridRef,
+) callconv(lib.calling_conv) Result {
+    const wrapper = terminal_ orelse return .invalid_value;
     const out = out_ref orelse return .invalid_value;
     out.* = null;
 
     const t: *ZigTerminal = wrapper.terminal;
-    const list = &t.screens.active.pages;
+    _ = std.enums.fromInt(TerminalScreen, @intFromEnum(screen_key)) orelse return .invalid_value;
+    const screen = t.screens.get(screen_key) orelse return .no_value;
+    const list = &screen.pages;
     const p = list.pin(.fromC(pt)) orelse return .invalid_value;
     const tracked_pin = list.trackPin(p) catch return .out_of_memory;
 
@@ -1825,8 +1849,8 @@ pub fn grid_ref_track(
     ref.* = .{
         .alloc = alloc,
         .terminal = wrapper,
-        .screen_key = t.screens.active_key,
-        .screen_generation = t.screens.generation(t.screens.active_key),
+        .screen_key = screen_key,
+        .screen_generation = t.screens.generation(screen_key),
         .pin = tracked_pin,
     };
 
@@ -6255,4 +6279,34 @@ test "get_multi null keys returns invalid_value" {
     var cols: u16 = 0;
     var values = [_]?*anyopaque{@ptrCast(&cols)};
     try testing.expectEqual(Result.invalid_value, get_multi(null, 1, null, &values, null));
+}
+
+/// C: GhosttyTerminalHistoryState. Tokens are compared only for equality,
+/// within the same terminal lifetime and screen incarnation.
+pub const HistoryState = extern struct {
+    size: usize = @sizeOf(HistoryState),
+    screen_incarnation: u64 = 0,
+    reset_serial: u64 = 0,
+    history_clear_serial: u64 = 0,
+    total_rows: u64 = 0,
+    cols: u16 = 0,
+    rows: u16 = 0,
+};
+
+pub fn history_state(terminal_: Terminal, key: TerminalScreen, out_: ?*HistoryState) callconv(lib.calling_conv) Result {
+    const t = (terminal_ orelse return .invalid_value).terminal;
+    const out = out_ orelse return .invalid_value;
+    if (out.size < @sizeOf(HistoryState)) return .invalid_value;
+    _ = std.enums.fromInt(TerminalScreen, @intFromEnum(key)) orelse return .invalid_value;
+    const screen = t.screens.get(key) orelse return .no_value;
+    out.* = .{
+        .size = out.size,
+        .screen_incarnation = t.screens.generation(key),
+        .reset_serial = screen.pages.page_serial_epoch,
+        .history_clear_serial = screen.pages.history_clear_serial,
+        .total_rows = screen.pages.total_rows,
+        .cols = screen.pages.cols,
+        .rows = screen.pages.rows,
+    };
+    return .success;
 }

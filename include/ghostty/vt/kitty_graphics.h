@@ -974,6 +974,34 @@ GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_next(
 
 /** @} */
 
+/** Borrow graphics from the screen owning a capture origin. The origin must
+ * belong to terminal and remain valid. Uses capture's normalized full-height
+ * range. The returned storage and all image/placement handles remain borrowed:
+ * any terminal mutation invalidates them. Copy needed resources before releasing
+ * exclusive terminal access. Returns NO_VALUE for an invalidated anchor or when
+ * graphics are disabled, INVALID_VALUE for NULL or foreign references.
+ */
+GHOSTTY_API GhosttyResult ghostty_terminal_kitty_graphics_for_ref(
+    GhosttyTerminal terminal, GhosttyTrackedGridRef origin,
+    GhosttyKittyGraphics *out);
+
+/** Resolve placement geometry against the capture origin, including inactive
+ * screens. Iterator and image must come from that origin's graphics storage.
+ * Other lifetime/result rules match ghostty_kitty_graphics_placement_render_info.
+ */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_placement_render_info_for_ref(
+    GhosttyKittyGraphicsPlacementIterator iterator,
+    GhosttyKittyGraphicsImage image, GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin, GhosttyKittyGraphicsPlacementRenderInfo *out);
+
+/** Reset placeholder scanning to the same full-height range as capture.
+ * The iterator is invalid after any terminal mutation. Failure clears its old
+ * range. Existing virtual-placement visibility and relative-root limitations
+ * apply unchanged. */
+GHOSTTY_API GhosttyResult ghostty_kitty_graphics_virtual_placement_iterator_reset_for_ref(
+    GhosttyKittyGraphicsVirtualPlacementIterator iterator,
+    GhosttyTerminal terminal, GhosttyTrackedGridRef origin);
+
 #ifdef __cplusplus
 }
 #endif

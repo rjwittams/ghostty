@@ -429,6 +429,26 @@ GHOSTTY_API void ghostty_render_state_free(GhosttyRenderState state);
 GHOSTTY_API GhosttyResult ghostty_render_state_update(GhosttyRenderState state,
                                           GhosttyTerminal terminal);
 
+/** Capture a full terminal-sized view beginning at a tracked cell's row.
+ * The origin reference selects its owning screen, including inactive screens.
+ * Near the bottom, the origin is shifted upwards to fit a full viewport;
+ * ghostty_terminal_viewport_for_ref reports the actual range. The anchor is not
+ * changed. This never changes the shared viewport or consumes source dirty
+ * flags. Application cursor and shared selection are excluded.
+ *
+ * Read the result with the existing render-state accessors. Use a dedicated
+ * scratch render state, not the state's existing live incremental consumer.
+ * Terminal access must remain exclusive during this call. On allocation failure
+ * scratch is safe to free or fully recapture, but its contents are unspecified.
+ * Owned row/style/grapheme data is valid until the next state update/free;
+ * hyperlink targets and image resources still require separate terminal reads.
+ * Returns INVALID_VALUE for NULL or foreign-terminal refs, NO_VALUE for stale
+ * or lost anchors, OUT_OF_MEMORY for allocation failure.
+ */
+GHOSTTY_API GhosttyResult ghostty_render_state_capture(
+    GhosttyRenderState state, GhosttyTerminal terminal,
+    GhosttyTrackedGridRef origin);
+
 /**
  * Begin an update of a render state instance from a terminal.
  *
