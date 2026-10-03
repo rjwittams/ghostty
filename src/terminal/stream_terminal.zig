@@ -1173,6 +1173,7 @@ pub const Handler = struct {
         func(self, .{
             .location = committed.loc,
             .contents = committed.contents,
+            .requires_completion = true,
             .name = committed.name,
             .granted = granted,
             .can_remember = pw.len > 0,

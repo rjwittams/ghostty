@@ -83,6 +83,10 @@ pub const Write = struct {
     location: Location,
     contents: []const Content,
 
+    /// True when success acknowledges completed host clipboard I/O.
+    /// Fire-and-forget consumers must reject these requests synchronously.
+    requires_completion: bool = false,
+
     /// Name of the writing program for permission prompts, if the
     /// protocol carries one. Empty otherwise.
     name: []const u8,
