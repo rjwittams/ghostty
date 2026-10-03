@@ -119,6 +119,8 @@ pub const ClipboardWrite = extern struct {
     /// Terminal-owned reply state; opaque to the embedder.
     ctx: *const anyopaque,
     reply: ClipboardWriteReplyFn,
+    /// True when success acknowledges completed host clipboard I/O.
+    requires_completion: bool,
 };
 
 /// The reply to a clipboard write request.
@@ -484,6 +486,7 @@ const Effects = struct {
             .can_remember = write.can_remember,
             .ctx = &ctx,
             .reply = &clipboardWriteReplyTrampoline,
+            .requires_completion = write.requires_completion,
         };
         func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
     }
@@ -5507,6 +5510,7 @@ test "set clipboard_write callback" {
         var last_name_len: usize = 0;
         var last_granted: bool = true;
         var last_can_remember: bool = true;
+        var last_requires_completion: bool = true;
         var next_result: clipboard.Write.Status = .success;
 
         fn clipboardWrite(
@@ -5524,6 +5528,7 @@ test "set clipboard_write callback" {
             last_name_len = request.name.len;
             last_granted = request.granted;
             last_can_remember = request.can_remember;
+            last_requires_completion = request.requires_completion;
 
             if (request.contents) |ptr| {
                 for (ptr[0..@min(request.contents_len, last_mimes.len)], 0..) |content, i| {
@@ -5576,6 +5581,8 @@ test "set clipboard_write callback" {
     try testing.expectEqual(@as(usize, 0), S.last_name_len);
     try testing.expect(!S.last_granted);
     try testing.expect(!S.last_can_remember);
+    // OSC 52 is fire-and-forget, so queue admission may answer success.
+    try testing.expect(!S.last_requires_completion);
 
     // OSC 52 destinations are normalized rather than exposed as wire bytes.
     const location_cases = [_]struct {
@@ -5637,6 +5644,7 @@ test "set clipboard_write callback" {
     handler.effects.clipboard_write.?(handler, .{
         .location = .primary,
         .contents = &internal_contents,
+        .requires_completion = true,
         .name = "app",
         .granted = true,
         .can_remember = true,
@@ -5647,6 +5655,8 @@ test "set clipboard_write callback" {
     try testing.expectEqual(@as(usize, 3), S.last_name_len);
     try testing.expect(S.last_granted);
     try testing.expect(S.last_can_remember);
+    // The completion requirement crosses the C boundary unchanged.
+    try testing.expect(S.last_requires_completion);
     try testing.expectEqual(@as(usize, 7), S.count);
     try testing.expectEqual(@as(usize, 5), S.last_contents_len);
     try testing.expectEqualStrings(
@@ -5708,6 +5718,7 @@ test "kitty clipboard write via C effects" {
         var last_data_lens: [4]usize = @splat(0);
         var last_granted: bool = true;
         var last_can_remember: bool = true;
+        var last_requires_completion: bool = false;
         var next_remember: bool = false;
 
         fn writePty(
@@ -5744,6 +5755,7 @@ test "kitty clipboard write via C effects" {
             }
             last_granted = request.granted;
             last_can_remember = request.can_remember;
+            last_requires_completion = request.requires_completion;
             request.reply(request, &.{
                 .size = @sizeOf(ClipboardWriteReply),
                 .result = .success,
@@ -5787,6 +5799,8 @@ test "kitty clipboard write via C effects" {
     );
     try testing.expect(!S.last_granted);
     try testing.expect(!S.last_can_remember);
+    // Kitty success acknowledges completed clipboard I/O, not queue admission.
+    try testing.expect(S.last_requires_completion);
 
     // Password grants round-trip through the C reply: the first pw'd
     // commit isn't granted and asks to remember, so the next one

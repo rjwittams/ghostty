@@ -878,6 +878,19 @@ struct GhosttyClipboardWrite {
 
   /** Answer the write; see the struct documentation. */
   GhosttyClipboardWriteReplyFn reply;
+
+  /**
+   * True when a success reply acknowledges completed host clipboard I/O
+   * (OSC 5522). False for fire-and-forget writes (OSC 52, OSC 1337 Copy).
+   * An asynchronous relay may accept a false request into its bounded queue
+   * and reply success, but must not reply success to a true request merely
+   * because it queued the data. Such relays should reply unsupported without
+   * queueing requests that require completion.
+   *
+   * Check size before accessing this appended field. If absent, the
+   * completion requirement is unknown; do not infer it from name or grants.
+   */
+  bool requires_completion;
 };
 
 /**

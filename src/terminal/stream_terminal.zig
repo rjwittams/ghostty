@@ -992,6 +992,7 @@ pub const Handler = struct {
             func(self, .{
                 .location = location,
                 .contents = &.{},
+                .requires_completion = false,
                 .name = "",
                 .granted = false,
                 .can_remember = false,
@@ -1024,6 +1025,7 @@ pub const Handler = struct {
         func(self, .{
             .location = location,
             .contents = &contents,
+            .requires_completion = false,
             .name = "",
             .granted = false,
             .can_remember = false,
@@ -1514,6 +1516,7 @@ pub const Handler = struct {
         func(self, .{
             .location = committed.loc,
             .contents = committed.contents,
+            .requires_completion = true,
             .name = committed.name,
             .granted = granted,
             .can_remember = pw.len > 0,
@@ -4171,6 +4174,7 @@ test "clipboard_write effect callback" {
         var result: clipboard.Write.Result = .{ .success = .{} };
         var last_location: clipboard.Location = .standard;
         var last_contents_len: usize = 0;
+        var last_requires_completion: bool = true;
         var last_mime: ?[]u8 = null;
         var last_data: ?[]u8 = null;
 
@@ -4187,6 +4191,7 @@ test "clipboard_write effect callback" {
             count += 1;
             last_location = write.location;
             last_contents_len = write.contents.len;
+            last_requires_completion = write.requires_completion;
             if (write.contents.len > 0) {
                 last_mime = testing.allocator.dupe(u8, write.contents[0].mime) catch
                     @panic("failed to capture clipboard MIME type");
@@ -4231,11 +4236,15 @@ test "clipboard_write effect callback" {
         try testing.expectEqual(@as(usize, 1), S.last_contents_len);
         try testing.expectEqualStrings("text/plain", S.last_mime.?);
         try testing.expectEqualSlices(u8, case.data, S.last_data.?);
+        try testing.expect(!S.last_requires_completion);
     }
 
     // Empty data is a clear, represented by an empty contents slice.
+    // It is fire-and-forget like any other OSC 52 write.
+    S.last_requires_completion = true;
     s.nextSlice("\x1B]52;s;\x1B\\");
     try testing.expectEqual(@as(usize, cases.len + 1), S.count);
+    try testing.expect(!S.last_requires_completion);
     try testing.expectEqual(clipboard.Location.selection, S.last_location);
     try testing.expectEqual(@as(usize, 0), S.last_contents_len);
     try testing.expect(S.last_mime == null);
@@ -4251,9 +4260,12 @@ test "clipboard_write effect callback" {
     s.nextSlice("\x1B]52;c;aGVs bG8=\x1B\\");
     try testing.expectEqual(@as(usize, cases.len + 1), S.count);
 
-    // OSC 1337 Copy shares the normalized clipboard write path.
+    // OSC 1337 Copy shares the normalized clipboard write path and has
+    // no write acknowledgement either.
+    S.last_requires_completion = true;
     s.nextSlice("\x1B]1337;Copy=:aVRlcm0y\x1B\\");
     try testing.expectEqual(@as(usize, cases.len + 2), S.count);
+    try testing.expect(!S.last_requires_completion);
     try testing.expectEqual(clipboard.Location.standard, S.last_location);
     try testing.expectEqualStrings("text/plain", S.last_mime.?);
     try testing.expectEqualStrings("iTerm2", S.last_data.?);

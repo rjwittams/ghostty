@@ -83,6 +83,13 @@ pub const Write = struct {
     location: Location,
     contents: []const Content,
 
+    /// True when a success reply acknowledges completed host clipboard
+    /// I/O (OSC 5522). False for fire-and-forget writes (OSC 52, OSC 1337
+    /// Copy). A consumer that only queues writes should reply unsupported
+    /// without queueing requests that set this. Every producer must choose
+    /// a value; there is deliberately no default.
+    requires_completion: bool,
+
     /// Name of the writing program for permission prompts, if the
     /// protocol carries one. Empty otherwise.
     name: []const u8,
