@@ -615,8 +615,11 @@ pub const State = struct {
 
         const source = p.sourceRect(image.*);
 
-        // Accumulate the placement
-        if (dest_size.width > 0 and dest_size.height > 0) {
+        // An explicit destination can be nonempty even when the source
+        // crop misses the image. Do not stretch an empty source rectangle.
+        if (dest_size.width > 0 and dest_size.height > 0 and
+            source.width > 0 and source.height > 0)
+        {
             try self.kitty_placements.append(alloc, .{
                 .image_id = .{ .kitty = image.id },
                 .x = x,
@@ -1516,4 +1519,42 @@ test "kitty renderer uploads the current animation frame" {
         &.{ 0, 0, 255, 255 },
         entry.image.pending.dataSlice(),
     );
+}
+
+test "kitty renderer skips an empty source with an explicit destination" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var t = try terminal.Terminal.init(io, alloc, .{ .rows = 3, .cols = 3 });
+    defer t.deinit(alloc);
+    t.width_px = 30;
+    t.height_px = 30;
+
+    var state: State = .empty;
+    defer state.deinit(alloc);
+
+    const storage = &t.screens.active.kitty_images;
+    const pixels = try alloc.alloc(u8, 4 * 3 * 3);
+    @memset(pixels, 0);
+    try storage.addImage(io, alloc, t.screens.active, .{
+        .id = 1,
+        .width = 4,
+        .height = 3,
+        .format = .rgb,
+        .data = .{ .complete = pixels },
+    });
+    const pin = try t.screens.active.pages.trackPin(
+        t.screens.active.cursor.page_pin.*,
+    );
+    try storage.addPlacement(io, alloc, t.screens.active, 1, 1, .{
+        .location = .{ .pin = pin },
+        .source_x = 4,
+        .columns = 2,
+        .rows = 2,
+        .source_y = 1,
+    });
+
+    state.kittyUpdate(alloc, &t, .{ .width = 10, .height = 10 });
+    try testing.expectEqual(@as(usize, 0), state.kitty_placements.items.len);
 }
