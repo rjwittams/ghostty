@@ -168,6 +168,13 @@ typedef const struct GhosttyKittyGraphicsImageImpl* GhosttyKittyGraphicsImage;
 typedef struct GhosttyKittyGraphicsPlacementIteratorImpl* GhosttyKittyGraphicsPlacementIterator;
 
 /**
+ * Opaque handle to a resolved Kitty graphics virtual placement iterator.
+ *
+ * @ingroup kitty_graphics
+ */
+typedef struct GhosttyKittyGraphicsVirtualPlacementIteratorImpl* GhosttyKittyGraphicsVirtualPlacementIterator;
+
+/**
  * Opaque handle to a render state instance.
  *
  * @ingroup render
